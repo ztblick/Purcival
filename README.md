@@ -1,78 +1,145 @@
-# Zach's Personal AI Assistant
+# Purcival
 
-A simple, self-hosted AI assistant built in stages.
+A personal AI assistant built from scratch, with help from Claude.S
 
-## Architecture
+Purcival runs on your own hardware, talks to you in the terminal, and lets you
+choose between cloud AI (Claude) and a local model running on your GPU. Different
+personas give it different personalities for different jobs.
+
+## How it works
 
 ```
-You (Telegram) ──→ Bot Layer ──→ Router ──→ Claude API (primary)
-                                    │
-                                    └──→ Ollama (local, future)
-                                    
-Scheduler ──→ Calendar Check ──→ Router ──→ You (Telegram)
-
-Everything persists to SQLite.
+You (terminal) ──→ Main ──→ Brain ──→ Claude API (cloud)
+                     │         │
+                     │         └──→ Ollama / Phi-4 (local GPU)
+                     │
+                     └──→ Persona files (personality)
+                     └──→ Conversation history (in-memory, per session)
 ```
 
-## Build Stages
+You type a message. The app loads the active persona's system prompt, appends
+your message to the conversation history, sends everything to whichever LLM
+provider is active, and renders the response with markdown formatting in your
+terminal. The model doesn't remember anything — your app manages all context.
 
-- [x] **Stage 1:** Claude API integration — send messages, get responses
-- [ ] **Stage 2:** Telegram bot — chat from your phone
-- [ ] **Stage 3:** SQLite persistence — conversation memory
-- [ ] **Stage 4:** Scheduled triggers — proactive morning briefings
-- [ ] **Stage 5:** Google Calendar integration (read-only)
-- [ ] **Stage 6:** Local model via Ollama — dual-model routing
-
-## Setup
-
-### 1. Clone and create virtual environment
+## Quick start
 
 ```bash
-git clone <your-repo-url>
-cd assistant
+git clone <your-repo-url> purcival
+cd purcival
+
 python3 -m venv venv
 source venv/bin/activate
-```
-
-### 2. Install dependencies
-
-```bash
 pip install -r requirements.txt
-```
 
-### 3. Configure your API key
-
-```bash
 cp .env.example .env
-# Edit .env and add your Anthropic API key
+# Edit .env with your settings
+
+# Make sure Ollama is running with a model pulled:
+#   ollama pull phi4
+
+python main.py
 ```
 
-### 4. Run
+## Usage
 
 ```bash
-# Interactive chat mode
+# Interactive mode — pick a persona at startup
 python main.py
 
-# Single message
-python main.py --message "What's on my mind today?"
+# Jump straight to a persona
+python main.py --persona percival
+
+# Use Claude instead of Ollama
+python main.py --provider claude
+
+# Send a single message
+python main.py -m "What should I focus on today?" --persona jocelyn
 ```
 
-## Project Structure
+### In-session commands
+
+| Command    | What it does                              |
+|------------|-------------------------------------------|
+| `/persona` | Switch persona (clears conversation)      |
+| `/claude`  | Switch to Claude API                      |
+| `/ollama`  | Switch to local model                     |
+| `/status`  | Show current persona, provider, and model |
+| `clear`    | Reset conversation history                |
+| `quit`     | Exit                                      |
+
+## Personas
+
+Each persona is a markdown file in `personas/` that defines a system prompt.
+The filename becomes the persona's name.
 
 ```
-assistant/
-├── .env.example        # Template for secrets (never commit .env)
-├── .gitignore          # Keeps secrets and venv out of git
-├── requirements.txt    # Python dependencies
-├── config.py           # Loads configuration from environment
-├── brain.py            # LLM interface (Claude now, Ollama later)
-├── main.py             # Entry point — interactive chat loop
-└── README.md
+personas/
+├── percival.md    — intellectual sparring partner
+├── jocelyn.md     — efficient executive assistant
+└── default.md     — general-purpose assistant
 ```
 
-## Key Principles
+**To create a new persona,** add a `.md` file to `personas/`. No code changes
+needed — the app discovers it automatically. Write it however makes sense to
+you; the full file contents become the system prompt.
 
-- **Secrets never go in code.** API keys live in `.env`, which is gitignored.
-- **The brain is swappable.** `brain.py` abstracts the LLM provider so we can
-  add Ollama later without changing anything else.
-- **Each stage builds on the last.** No rewrites, just new layers.
+## Project structure
+
+```
+purcival/
+├── main.py             Entry point — terminal UI, persona picker, chat loop
+├── brain.py            LLM interface — routes to Claude or Ollama
+├── config.py           Loads settings from .env
+├── personas.py         Discovers and loads persona files
+├── personas/           Personality definitions (markdown)
+├── requirements.txt    Python dependencies
+├── .env.example        Configuration template
+└── .gitignore          Keeps secrets and artifacts out of git
+```
+
+## Dual-model architecture
+
+Purcival can talk to two different LLM backends:
+
+**Claude** (via Anthropic API) — highest quality, costs money per token,
+requires internet. Best for deep conversations and complex reasoning.
+
+**Ollama** (local inference) — free, private, runs on your GPU, works offline.
+Quality depends on your hardware and model choice. Good for routine tasks,
+quick questions, and development.
+
+Both use the same message format. You can switch mid-conversation and the
+history carries over. The brain module hides the provider differences so
+the rest of the app doesn't care which model is answering.
+
+## Configuration
+S
+All settings live in `.env` (never committed to git):
+
+```bash
+DEFAULT_PROVIDER=ollama          # or "claude"
+ANTHROPIC_API_KEY=your-key-here  # for Claude
+CLAUDE_MODEL=claude-sonnet-4-6
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=phi4
+DEFAULT_PERSONA=default          # used for single-message mode
+```
+
+## Roadmap
+
+- [x] Claude API integration
+- [x] Local inference via Ollama
+- [x] Dual-model routing with mid-conversation switching
+- [x] Rich terminal UI with markdown rendering
+- [x] Persona system with multiple personalities
+- [ ] Telegram bot — chat from your phone
+- [ ] SQLite persistence — memory across sessions
+- [ ] Scheduled triggers — proactive messages
+- [ ] Google Calendar integration (read-only)
+
+## Requirements
+
+- Python 3.10+
+- For local inference: Ollama + a GPU with enough VRAM for your model
+- For Claude: an Anthropic API key with credits
