@@ -28,5 +28,32 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "phi4")
 
 # --- Personas ---
 # Which persona to load by default (filename without .md extension)
-# Persona files live in the personas/ directory
 DEFAULT_PERSONA = os.getenv("DEFAULT_PERSONA", "default")
+
+# --- Telegram ---
+# Your Telegram user ID — only this user can talk to the bots.
+# Message @userinfobot on Telegram to find yours.
+TELEGRAM_ALLOWED_USER_ID = os.getenv("TELEGRAM_ALLOWED_USER_ID", "")
+
+
+def get_telegram_token(persona_name: str) -> str:
+    """
+    Get the Telegram bot token for a specific persona.
+
+    Each persona has its own bot and its own token.
+    Tokens are stored as environment variables:
+        TELEGRAM_TOKEN_PURCIVAL=123456:ABC...
+        TELEGRAM_TOKEN_JOCELYN=789012:DEF...
+
+    This keeps tokens out of persona files (which are system prompts,
+    not config) and lets you manage all secrets in one place (.env).
+    """
+    key = f"TELEGRAM_TOKEN_{persona_name.upper()}"
+    token = os.getenv(key, "")
+    if not token:
+        raise RuntimeError(
+            f"No Telegram token for persona '{persona_name}'.\n"
+            f"Set {key} in your .env file.\n"
+            f"Get a token from @BotFather on Telegram."
+        )
+    return token

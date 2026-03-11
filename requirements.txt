@@ -3,3 +3,6 @@ anthropic>=0.84.0
 python-dotenv>=1.0.0
 requests>=2.31.0
 rich>=13.0.0
+
+# Stage 2: Telegram
+python-telegram-bot>=22.0

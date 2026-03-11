@@ -3,7 +3,7 @@ Main entry point for the assistant.
 
 Run with:
     python main.py                          — pick persona interactively
-    python main.py --persona percival       — start as Percival
+    python main.py --persona purcival       — start as Purcival
     python main.py --provider claude        — use Claude instead of Ollama
     python main.py -m "hello"               — single message, then exit
 """
