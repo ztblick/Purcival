@@ -5,7 +5,7 @@ Run with:
     python main.py                          — pick persona interactively
     python main.py --persona purcival       — start as Purcival
     python main.py --provider claude        — use Claude instead of Ollama
-    python main.py -m "hello"               — single message, then exit
+    python main.py -m "hello" --persona jocelyn  — single message, then exit
 """
 
 import argparse
@@ -13,6 +13,7 @@ import brain
 import config
 import personas
 
+from memory import PersonaMemory
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -31,6 +32,9 @@ _theme = Theme({
 })
 
 console = Console(theme=_theme)
+
+# How many recent messages to include in each API call.
+RECENT_MESSAGE_LIMIT = 40
 
 
 def _print_response(text: str, provider: str, persona_name: str):
@@ -100,19 +104,23 @@ def _pick_persona() -> str:
         console.print(f"[error]Unknown persona: {choice}[/error]")
 
 
-def _print_banner(provider: str, persona_name: str):
+def _print_banner(provider: str, persona_name: str, memory: PersonaMemory):
     """Print the startup banner."""
+    total = memory.get_message_count()
+    memory_status = f"{total} messages in memory" if total > 0 else "fresh start"
+
     banner = (
-        "[bold]Personal Assistant — Stage 1[/bold]\n"
+        "[bold]Personal Assistant — Stage 3[/bold]\n"
         f"Persona:  [persona]{persona_name}[/persona]\n"
         f"Provider: [assistant]{provider}[/assistant]\n"
+        f"Memory:   [status]{memory_status}[/status]\n"
         "\n"
         "[status]Commands:[/status]\n"
         "  /claude   — switch to Claude\n"
         "  /ollama   — switch to Ollama\n"
-        "  /persona  — switch persona (clears history)\n"
+        "  /persona  — switch persona\n"
         "  /status   — show current state\n"
-        "  clear     — reset conversation\n"
+        "  clear     — reset conversation (erases memory!)\n"
         "  quit      — exit"
     )
     console.print(Panel(banner, border_style="dim"))
@@ -123,15 +131,13 @@ def chat_loop(provider: str, persona_name: str):
     """
     Interactive conversation in the terminal.
 
-    Maintains a running message history and the active persona's
-    system prompt. Switching personas clears history, since a new
-    personality shouldn't inherit a conversation that was shaped
-    by a different one.
+    Messages are persisted to the persona's database. Switching personas
+    loads a different database — each persona has its own memory.
+    The 'clear' command wipes the current persona's entire history.
     """
     system_prompt = personas.load_persona(persona_name)
-    _print_banner(provider, persona_name)
-
-    history: list[dict] = []
+    memory = PersonaMemory(persona_name)
+    _print_banner(provider, persona_name, memory)
 
     while True:
         try:
@@ -148,8 +154,8 @@ def chat_loop(provider: str, persona_name: str):
             break
 
         if user_input.lower() == "clear":
-            history.clear()
-            console.print("[system]— conversation cleared —[/system]\n")
+            memory.clear_history()
+            console.print("[system]— conversation history erased —[/system]\n")
             continue
 
         # --- Provider switching ---
@@ -171,10 +177,9 @@ def chat_loop(provider: str, persona_name: str):
         if user_input.lower() == "/persona":
             persona_name = _pick_persona()
             system_prompt = personas.load_persona(persona_name)
-            history.clear()
+            memory = PersonaMemory(persona_name)
             console.print(
-                f"[system]— now talking to [persona]{persona_name}[/persona] "
-                f"(history cleared) —[/system]\n"
+                f"[system]— now talking to [persona]{persona_name}[/persona] —[/system]\n"
             )
             continue
 
@@ -182,14 +187,22 @@ def chat_loop(provider: str, persona_name: str):
         if user_input.lower() == "/status":
             model = (config.CLAUDE_MODEL if provider == "claude"
                      else config.OLLAMA_MODEL)
-            console.print(f"  [status]Persona:[/status]  [persona]{persona_name}[/persona]")
-            console.print(f"  [status]Provider:[/status] [assistant]{provider}[/assistant]")
-            console.print(f"  [status]Model:[/status]    {model}")
-            console.print(f"  [status]History:[/status]  {len(history)} messages\n")
+            total = memory.get_message_count()
+            summaries = len(memory.get_all_summaries())
+            console.print(f"  [status]Persona:[/status]   [persona]{persona_name}[/persona]")
+            console.print(f"  [status]Provider:[/status]  [assistant]{provider}[/assistant]")
+            console.print(f"  [status]Model:[/status]     {model}")
+            console.print(f"  [status]Messages:[/status]  {total} stored")
+            console.print(f"  [status]Summaries:[/status] {summaries}\n")
             continue
 
         # --- Send message ---
-        history.append({"role": "user", "content": user_input})
+        # Persist user message first
+        memory.add_message("user", user_input)
+
+        # Load recent history from database
+        recent = memory.get_recent_messages(limit=RECENT_MESSAGE_LIMIT)
+        history = [{"role": m["role"], "content": m["content"]} for m in recent]
 
         with console.status("[status]Thinking...[/status]", spinner="dots"):
             try:
@@ -200,10 +213,10 @@ def chat_loop(provider: str, persona_name: str):
                 )
             except Exception as e:
                 console.print(f"\n[error]✗ Error ({provider}): {e}[/error]\n")
-                history.pop()
                 continue
 
-        history.append({"role": "assistant", "content": response})
+        # Persist assistant response
+        memory.add_message("assistant", response)
 
         console.print()
         _print_response(response, provider, persona_name)
@@ -211,14 +224,25 @@ def chat_loop(provider: str, persona_name: str):
 
 
 def single_message(message: str, provider: str, persona_name: str):
-    """Send one message and print the response."""
+    """Send one message and print the response. Also persisted."""
     system_prompt = personas.load_persona(persona_name)
+    memory = PersonaMemory(persona_name)
+
+    # Persist and include history even in single-message mode —
+    # this way the persona remembers past single-message interactions too.
+    memory.add_message("user", message)
+
+    recent = memory.get_recent_messages(limit=RECENT_MESSAGE_LIMIT)
+    history = [{"role": m["role"], "content": m["content"]} for m in recent]
+
     with console.status("[status]Thinking...[/status]", spinner="dots"):
         response = brain.ask(
-            [{"role": "user", "content": message}],
+            history,
             system=system_prompt,
             provider=provider,
         )
+
+    memory.add_message("assistant", response)
     _print_response(response, provider, persona_name)
 
 
@@ -240,7 +264,7 @@ if __name__ == "__main__":
         "--persona",
         type=str,
         default=None,
-        help="Persona to use (e.g. percival, jocelyn, default)",
+        help="Persona to use (e.g. purcival, jocelyn, default)",
     )
     args = parser.parse_args()
 

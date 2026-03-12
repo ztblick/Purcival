@@ -6,3 +6,6 @@ rich>=13.0.0
 
 # Stage 2: Telegram
 python-telegram-bot>=22.0
+
+# Stage 3: Persistance
+numpy>=2.4.3

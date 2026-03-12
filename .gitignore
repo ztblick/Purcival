@@ -9,7 +9,10 @@ __pycache__/
 *.pyc
 *.pyo
 
-# SQLite databases (will contain personal data later)
+# Persona memory databases (contain personal conversation data)
+data/
+
+# SQLite databases (safety net in case any end up in project root)
 *.db
 
 # OS files

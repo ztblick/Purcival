@@ -2,7 +2,7 @@
 Launch a Telegram bot for a specific persona.
 
 Usage:
-    python run_telegram.py --persona percival
+    python run_telegram.py --persona purcival
     python run_telegram.py --persona jocelyn
 
 Each persona runs as its own process with its own Telegram bot.
@@ -40,7 +40,7 @@ def main():
         "--persona",
         type=str,
         required=True,
-        help="Which persona to run (e.g. percival, jocelyn, default)",
+        help="Which persona to run (e.g. purcival, jocelyn, default)",
     )
     args = parser.parse_args()
 
