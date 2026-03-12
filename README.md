@@ -1,11 +1,12 @@
 # Purcival
 
-A personal AI assistant built from scratch, with help from claude, named after our cat.
+A personal AI assistant built from scratch, with help from Claude, named after our cat.
 
 Purcival runs on your own hardware, talks to you via Telegram on your phone,
 and lets you choose between cloud AI (Claude) and a local model running on
 your GPU. Each persona is a separate Telegram bot with its own personality
-— message Purcival for intellectual sparring, Jocelyn for task management.
+and its own persistent memory — message Purcival for intellectual sparring,
+Jocelyn for task management. Conversations survive restarts, reboots, and crashes.
 
 ## How it works
 
@@ -19,17 +20,19 @@ Your phone (Telegram)                         Your Linux box
     │            ┌─────────────────────┐            │
     │            │ Long poll Telegram  │            │
     │            │ Load persona prompt │            │
-    │            │ Append to history   │            │
+    │            │ Persist message     │──→ data/purcival/memory.db
+    │            │ Load recent history │←── data/purcival/memory.db
     │            │ Call brain.ask()  ──┼──→ Ollama (local GPU)
     │            │       or          ──┼──→ Claude API (cloud)
+    │            │ Persist response    │──→ data/purcival/memory.db
     │            │ Send response back  │            │
     │            └─────────────────────┘            │
 ```
 
-Each persona runs as its own process with its own Telegram bot. Your Linux
-box long-polls Telegram's servers — no open ports or public IP needed. The
-model doesn't remember anything between API calls; your app manages all
-conversation context.
+Each persona runs as its own process with its own Telegram bot and its own
+SQLite database. Your Linux box long-polls Telegram's servers — no open ports
+or public IP needed. The model doesn't remember anything between API calls;
+Purcival manages all conversation context, persistence, and retrieval.
 
 ## Quick start
 
@@ -106,7 +109,7 @@ sudo systemctl status 'purcival@*'     # status of all personas
 
 Each persona is a markdown file in `personas/` that defines a system prompt.
 The filename becomes the persona's name. Each persona gets its own Telegram
-bot and runs as its own process.
+bot, its own process, and its own memory database.
 
 ```
 personas/
@@ -116,7 +119,34 @@ personas/
 ```
 
 To add a new persona: create a `.md` file in `personas/`, create a Telegram
-bot with @BotFather, add the token to `.env`, and start the service.
+bot with @BotFather, add the token to `.env`, and start the service. The
+persona gets a fresh, independent memory database automatically.
+
+## Memory system
+
+Purcival uses per-persona SQLite databases to persist every conversation.
+Messages survive process restarts, reboots, and crashes.
+
+```
+data/
+├── user_context.md          ← shared context about you (manually maintained)
+├── purcival/
+│   └── memory.db            ← Purcival's conversation history and summaries
+├── jocelyn/
+│   └── memory.db            ← Jocelyn's conversation history and summaries
+└── default/
+    └── memory.db
+```
+
+Each persona's memory is completely isolated — Purcival doesn't know what
+you discussed with Jocelyn, and vice versa. The shared `user_context.md`
+file is the one piece of cross-persona context: your values, current
+projects, life situation. You update it manually when things change.
+
+The memory system has three tiers:
+- **Shared context** (`user_context.md`) — who you are, read by all personas
+- **Conversation summaries** — auto-generated condensations of older conversations, retrieved by semantic similarity (coming soon)
+- **Verbatim messages** — the full record of every message, recent ones included directly in each API call
 
 ## Project structure
 
@@ -126,13 +156,17 @@ purcival/
 ├── run_telegram.py      Telegram entry point — one persona per process
 ├── telegram_bot.py      Telegram bot logic — long polling, message handling
 ├── brain.py             LLM interface — routes to Claude or Ollama
+├── memory.py            Persistent storage — SQLite, messages, summaries, embeddings
 ├── config.py            Loads settings from .env
 ├── personas.py          Discovers and loads persona files
 ├── personas/            Personality definitions (markdown)
+├── data/                Per-persona databases (gitignored)
 ├── purcival@.service    Systemd template for background services
 ├── requirements.txt     Python dependencies
+├── test_memory.py       Tests for the database layer
+├── test_persistence.py  Integration tests for message persistence
 ├── .env.example         Configuration template
-└── .gitignore           Keeps secrets and artifacts out of git
+└── .gitignore           Keeps secrets, data, and artifacts out of git
 ```
 
 ## Dual-model architecture
@@ -141,21 +175,17 @@ purcival/
 internet. Switch to it with `/provider claude` in Telegram.
 
 **Ollama** (local inference) — free, private, runs on your GPU. Purcival
-currently runs Phi-4 on an RTX 3060 (12GB VRAM).
+currently runs Mistral Small 3.2 on an RTX 3060 (12GB VRAM).
 
 Both use the same message format. The brain module abstracts the provider
 so nothing else in the app knows which model is responding.
 
-## Known limitations
+## Running tests
 
-**Conversation history grows unbounded.** Every message in a session gets
-appended to a list and sent to the model on every turn. Long conversations
-will eventually hit the model's context window limit and increase latency
-and cost. Stage 3 (SQLite persistence) will address this with context
-windowing and summarization.
-
-**History is in-memory only.** Conversations are lost when a process
-restarts. Stage 3 will persist them to disk.
+```bash
+python test_memory.py        # database layer tests
+python test_persistence.py   # integration tests for message persistence
+```
 
 ## Configuration
 
@@ -166,7 +196,7 @@ DEFAULT_PROVIDER=ollama
 ANTHROPIC_API_KEY=your-key-here
 CLAUDE_MODEL=claude-sonnet-4-6
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=phi4
+OLLAMA_MODEL=mistral-small3.2
 DEFAULT_PERSONA=default
 TELEGRAM_ALLOWED_USER_ID=
 TELEGRAM_TOKEN_PURCIVAL=
@@ -176,13 +206,18 @@ TELEGRAM_TOKEN_JOCELYN=
 ## Roadmap
 
 - [x] Claude API integration
-- [x] Local inference via Ollama (Phi-4 on RTX 3060)
+- [x] Local inference via Ollama
 - [x] Dual-model routing with mid-conversation switching
 - [x] Rich terminal UI with markdown rendering
 - [x] Persona system — multiple personalities from markdown files
 - [x] Telegram bots — one per persona, chat from your phone
 - [x] Systemd services — auto-start on boot, auto-restart on crash
-- [ ] SQLite persistence — memory across sessions, context management
+- [x] SQLite persistence — messages survive restarts
+- [ ] Shared user context (`user_context.md`)
+- [ ] Context assembly — build full prompts from persona + context + history
+- [ ] Embedding infrastructure — vector similarity for memory retrieval
+- [ ] Conversation summarization — compress older conversations automatically
+- [ ] Semantic retrieval — surface relevant past conversations in new chats
 - [ ] Scheduled triggers — proactive messages
 - [ ] Google Calendar integration (read-only)
 
