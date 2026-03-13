@@ -147,9 +147,10 @@ class PersonaMemory:
 
         conn = self._connect()
         try:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor = conn.execute(
-                "INSERT INTO messages (role, content) VALUES (?, ?)",
-                (role, content),
+                "INSERT INTO messages (role, content, created_at) VALUES (?, ?, ?)",
+                (role, content, now),
             )
             conn.commit()
             return cursor.lastrowid
@@ -253,12 +254,13 @@ class PersonaMemory:
 
         conn = self._connect()
         try:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor = conn.execute(
                 """
-                INSERT INTO summaries (summary, message_start, message_end, embedding)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO summaries (summary, message_start, message_end, embedding, created_at)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (summary, message_start, message_end, embedding_blob),
+                (summary, message_start, message_end, embedding_blob, now),
             )
             conn.commit()
             return cursor.lastrowid

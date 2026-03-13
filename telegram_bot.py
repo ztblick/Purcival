@@ -5,7 +5,7 @@ Each instance of this bot serves exactly ONE persona. To run multiple
 personas, you launch multiple processes:
 
     python run_telegram.py --persona purcival
-    python run_telegram.py --persona jocelyn
+    python run_telegram.py --persona ada
 
 Each persona has its own Telegram bot (its own @username, avatar, and
 chat thread on your phone) and its own bot token in .env.
@@ -43,13 +43,10 @@ import brain
 import config
 import personas
 from memory import PersonaMemory
+from context import assemble_context, DEVICE_TELEGRAM
+from summarizer import check_and_summarize
 
 logger = logging.getLogger(__name__)
-
-# How many recent messages to include in each API call.
-# This controls the "short-term memory" window. Older messages
-# are covered by summaries (once Stage 3 summarization is built).
-RECENT_MESSAGE_LIMIT = 40
 
 
 class PersonaBot:
@@ -63,7 +60,7 @@ class PersonaBot:
 
     def __init__(self, persona_name: str):
         self.persona_name = persona_name
-        self.system_prompt = personas.load_persona(persona_name)
+        self.persona_prompt = personas.load_persona(persona_name)
         self.token = config.get_telegram_token(persona_name)
         self.provider = config.DEFAULT_PROVIDER
 
@@ -75,17 +72,6 @@ class PersonaBot:
         if not config.TELEGRAM_ALLOWED_USER_ID:
             return True
         return str(user_id) == str(config.TELEGRAM_ALLOWED_USER_ID)
-
-    def _get_message_history(self) -> list[dict]:
-        """
-        Load recent messages from the database in the format brain.ask() expects.
-
-        Returns a list of {"role": ..., "content": ...} dicts, ordered
-        chronologically. The database stores more fields (id, created_at)
-        but the LLM only needs role and content.
-        """
-        recent = self.memory.get_recent_messages(limit=RECENT_MESSAGE_LIMIT)
-        return [{"role": m["role"], "content": m["content"]} for m in recent]
 
     # --- Command Handlers ---
 
@@ -165,8 +151,10 @@ class PersonaBot:
         # we have a record of what was said.
         self.memory.add_message("user", user_text)
 
-        # Load recent history from the database
-        history = self._get_message_history()
+        # Assemble the full context: system prompt + recent messages
+        system_prompt, messages = assemble_context(
+            self.persona_prompt, self.memory, device=DEVICE_TELEGRAM
+        )
 
         # Show "typing..." indicator while the model thinks
         await update.message.chat.send_action(ChatAction.TYPING)
@@ -174,8 +162,8 @@ class PersonaBot:
         # Get the response
         try:
             response = brain.ask(
-                history,
-                system=self.system_prompt,
+                messages,
+                system=system_prompt,
                 provider=self.provider,
             )
         except Exception as e:
@@ -196,6 +184,13 @@ class PersonaBot:
         else:
             for i in range(0, len(response), 4096):
                 await update.message.reply_text(response[i:i + 4096])
+
+        # Check if older messages need summarization.
+        # This runs AFTER the response is sent, so the user never waits.
+        try:
+            check_and_summarize(self.memory)
+        except Exception as e:
+            logger.error(f"Summarization error: {e}")
 
     # --- Entry Point ---
 

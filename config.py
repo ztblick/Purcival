@@ -43,7 +43,6 @@ def get_telegram_token(persona_name: str) -> str:
     Each persona has its own bot and its own token.
     Tokens are stored as environment variables:
         TELEGRAM_TOKEN_PURCIVAL=123456:ABC...
-        TELEGRAM_TOKEN_JOCELYN=789012:DEF...
 
     This keeps tokens out of persona files (which are system prompts,
     not config) and lets you manage all secrets in one place (.env).

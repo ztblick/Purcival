@@ -5,7 +5,7 @@ Run with:
     python main.py                          — pick persona interactively
     python main.py --persona purcival       — start as Purcival
     python main.py --provider claude        — use Claude instead of Ollama
-    python main.py -m "hello" --persona jocelyn  — single message, then exit
+    python main.py -m "hello" --persona ada  — single message, then exit
 """
 
 import argparse
@@ -14,6 +14,8 @@ import config
 import personas
 
 from memory import PersonaMemory
+from context import assemble_context
+from summarizer import check_and_summarize
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -32,9 +34,6 @@ _theme = Theme({
 })
 
 console = Console(theme=_theme)
-
-# How many recent messages to include in each API call.
-RECENT_MESSAGE_LIMIT = 40
 
 
 def _print_response(text: str, provider: str, persona_name: str):
@@ -135,7 +134,7 @@ def chat_loop(provider: str, persona_name: str):
     loads a different database — each persona has its own memory.
     The 'clear' command wipes the current persona's entire history.
     """
-    system_prompt = personas.load_persona(persona_name)
+    persona_prompt = personas.load_persona(persona_name)
     memory = PersonaMemory(persona_name)
     _print_banner(provider, persona_name, memory)
 
@@ -176,7 +175,7 @@ def chat_loop(provider: str, persona_name: str):
         # --- Persona switching ---
         if user_input.lower() == "/persona":
             persona_name = _pick_persona()
-            system_prompt = personas.load_persona(persona_name)
+            persona_prompt = personas.load_persona(persona_name)
             memory = PersonaMemory(persona_name)
             console.print(
                 f"[system]— now talking to [persona]{persona_name}[/persona] —[/system]\n"
@@ -200,14 +199,13 @@ def chat_loop(provider: str, persona_name: str):
         # Persist user message first
         memory.add_message("user", user_input)
 
-        # Load recent history from database
-        recent = memory.get_recent_messages(limit=RECENT_MESSAGE_LIMIT)
-        history = [{"role": m["role"], "content": m["content"]} for m in recent]
+        # Assemble full context: system prompt + recent messages
+        system_prompt, messages = assemble_context(persona_prompt, memory)
 
         with console.status("[status]Thinking...[/status]", spinner="dots"):
             try:
                 response = brain.ask(
-                    history,
+                    messages,
                     system=system_prompt,
                     provider=provider,
                 )
@@ -222,28 +220,48 @@ def chat_loop(provider: str, persona_name: str):
         _print_response(response, provider, persona_name)
         console.print()
 
+        # Check if older messages need summarization
+        try:
+            with console.status(
+                "[status]Committing conversation to memory...[/status]",
+                spinner="dots",
+            ):
+                summarized = check_and_summarize(memory)
+            if summarized:
+                console.print(
+                    "[status]— older messages summarized and stored in memory —[/status]\n"
+                )
+        except Exception as e:
+            console.print(f"[error]Summarization error: {e}[/error]\n")
+
 
 def single_message(message: str, provider: str, persona_name: str):
     """Send one message and print the response. Also persisted."""
-    system_prompt = personas.load_persona(persona_name)
+    persona_prompt = personas.load_persona(persona_name)
     memory = PersonaMemory(persona_name)
 
     # Persist and include history even in single-message mode —
     # this way the persona remembers past single-message interactions too.
     memory.add_message("user", message)
 
-    recent = memory.get_recent_messages(limit=RECENT_MESSAGE_LIMIT)
-    history = [{"role": m["role"], "content": m["content"]} for m in recent]
+    # Assemble full context
+    system_prompt, messages = assemble_context(persona_prompt, memory)
 
     with console.status("[status]Thinking...[/status]", spinner="dots"):
         response = brain.ask(
-            history,
+            messages,
             system=system_prompt,
             provider=provider,
         )
 
     memory.add_message("assistant", response)
     _print_response(response, provider, persona_name)
+
+    # Check if summarization is needed
+    try:
+        check_and_summarize(memory)
+    except Exception:
+        pass  # Silent in single-message mode
 
 
 if __name__ == "__main__":
@@ -264,7 +282,7 @@ if __name__ == "__main__":
         "--persona",
         type=str,
         default=None,
-        help="Persona to use (e.g. purcival, jocelyn, default)",
+        help="Persona to use (e.g. purcival, ada, default)",
     )
     args = parser.parse_args()
 

@@ -6,7 +6,7 @@ Each persona is a markdown file that contains a system prompt. The filename
 
     personas/
     ├── percival.md    →  persona name: "percival"
-    ├── jocelyn.md     →  persona name: "jocelyn"
+    ├── ada.md         →  persona name: "ada"
     └── default.md     →  persona name: "default"
 
 To create a new persona, just drop a new .md file in the personas/ directory.
