@@ -12,6 +12,9 @@ __pycache__/
 # Persona memory databases (contain personal conversation data)
 data/
 
+# Debug prompt dumps (contain full conversation context)
+debug/
+
 # SQLite databases (safety net in case any end up in project root)
 *.db
 

@@ -5,7 +5,7 @@ Each instance of this bot serves exactly ONE persona. To run multiple
 personas, you launch multiple processes:
 
     python run_telegram.py --persona purcival
-    python run_telegram.py --persona ada
+    python run_telegram.py --persona jocelyn
 
 Each persona has its own Telegram bot (its own @username, avatar, and
 chat thread on your phone) and its own bot token in .env.
@@ -45,6 +45,7 @@ import personas
 from memory import PersonaMemory
 from context import assemble_context, DEVICE_TELEGRAM
 from summarizer import check_and_summarize
+from proactive import start_scheduler, seed_hourly_triggers
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +65,14 @@ class PersonaBot:
         self.token = config.get_telegram_token(persona_name)
         self.provider = config.DEFAULT_PROVIDER
 
-        # Persistent memory — replaces the old in-memory history dict
+        # Persistent memory
         self.memory = PersonaMemory(persona_name)
+
+        # Telegram chat ID for proactive messaging. Set on first
+        # authorized message received — we can't send proactive
+        # messages until the user has messaged us at least once.
+        self._chat_id: int | None = None
+        self._app = None  # Set in run(), needed for proactive sends
 
     def _is_authorized(self, user_id: int) -> bool:
         """Check if a user is allowed to talk to this bot."""
@@ -85,8 +92,7 @@ class PersonaBot:
             f"Just send me a message and I'll respond.\n\n"
             f"Commands:\n"
             f"/provider — switch between claude and ollama\n"
-            f"/status — show current state\n"
-            f"/clear — reset conversation history",
+            f"/status — show current state",
             parse_mode="Markdown",
         )
 
@@ -129,12 +135,14 @@ class PersonaBot:
         )
 
     async def cmd_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /clear — wipe all messages and summaries for this persona."""
+        """Handle /clear — disabled on Telegram to prevent accidental data loss."""
         if not self._is_authorized(update.effective_user.id):
             return
 
-        self.memory.clear_history()
-        await update.message.reply_text("Conversation history cleared.")
+        await update.message.reply_text(
+            "Memory clearing is disabled on Telegram to prevent accidental "
+            "data loss. Use the terminal interface (main.py) to clear history."
+        )
 
     # --- Message Handler ---
 
@@ -144,6 +152,11 @@ class PersonaBot:
         if not self._is_authorized(user_id):
             logger.warning(f"Unauthorized message from user {user_id}")
             return
+
+        # Capture chat ID for proactive messaging
+        if self._chat_id is None:
+            self._chat_id = update.effective_chat.id
+            logger.info(f"Chat ID captured: {self._chat_id}")
 
         user_text = update.message.text
 
@@ -197,6 +210,7 @@ class PersonaBot:
     def run(self):
         """Start the bot with long polling. Blocks forever."""
         app = Application.builder().token(self.token).build()
+        self._app = app
 
         # Register handlers
         app.add_handler(CommandHandler("start", self.cmd_start))
@@ -206,6 +220,38 @@ class PersonaBot:
         app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message)
         )
+
+        # Seed recurring triggers (this is synchronous, fine to do now)
+        seed_hourly_triggers(self.memory)
+
+        async def send_proactive(text: str):
+            """Send a proactive message to the user via Telegram."""
+            if self._chat_id is None:
+                logger.warning(
+                    "Cannot send proactive message: no chat ID yet. "
+                    "User must send at least one message first."
+                )
+                return
+            try:
+                await app.bot.send_message(
+                    chat_id=self._chat_id,
+                    text=text,
+                    parse_mode="Markdown",
+                )
+            except Exception:
+                # Fallback to plain text if markdown fails
+                await app.bot.send_message(
+                    chat_id=self._chat_id,
+                    text=text,
+                )
+
+        # Start the scheduler AFTER the event loop is running.
+        # app.post_init runs after the Application has started its
+        # asyncio event loop, which APScheduler's AsyncIOScheduler needs.
+        async def on_startup(application):
+            start_scheduler(self.memory, send_proactive, self.persona_prompt)
+
+        app.post_init = on_startup
 
         logger.info(f"Starting Telegram bot for persona: {self.persona_name}")
         logger.info(f"Default provider: {self.provider}")

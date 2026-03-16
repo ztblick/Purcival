@@ -7,5 +7,8 @@ rich>=13.0.0
 # Stage 2: Telegram
 python-telegram-bot>=22.0
 
-# Stage 3: Persistance
-numpy>=2.4.3
+# Stage 3: Memory
+numpy>=1.24.0
+
+# Stage 4: Proactive messaging
+apscheduler>=3.10.0

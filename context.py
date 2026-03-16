@@ -43,14 +43,19 @@ DEVICE_TELEGRAM = "telegram"
 
 # --- Token Budgets ---
 # These control how much space each section gets in the prompt.
-# The total system prompt should stay under ~20,000 tokens to leave
-# room for the messages array within the model's context window.
+# The budgets represent upper bounds — typical usage will be lower.
+# Typical total: ~20K tokens. Upper bound: ~32K tokens.
+#
+# The key insight: verbatim messages are the biggest cost driver
+# because they're sent on every API call. Keeping this window
+# moderate and relying on summaries for older context saves money
+# without sacrificing quality.
 
 BUDGET_PERSONA = 2_000
 BUDGET_USER_CONTEXT = 2_000
-BUDGET_SUMMARIES = 8_000
-BUDGET_ADDITIONAL = 8_000
-BUDGET_MESSAGES = 32_000
+BUDGET_SUMMARIES = 8_000       # Upper bound; typically ~4K
+BUDGET_ADDITIONAL = 8_000      # Upper bound; reserved for future integrations
+BUDGET_MESSAGES = 8_000        # ~25-35 exchanges; older messages get summarized
 
 # --- Summary Retrieval Settings ---
 

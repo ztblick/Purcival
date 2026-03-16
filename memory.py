@@ -114,11 +114,24 @@ class PersonaMemory:
                     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS triggers (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    type        TEXT NOT NULL,
+                    fire_at     TIMESTAMP NOT NULL,
+                    context     TEXT,
+                    recurring   TEXT,
+                    fired       BOOLEAN DEFAULT FALSE,
+                    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_messages_created
                     ON messages(created_at);
 
                 CREATE INDEX IF NOT EXISTS idx_summaries_range
                     ON summaries(message_start, message_end);
+
+                CREATE INDEX IF NOT EXISTS idx_triggers_fire_at
+                    ON triggers(fire_at);
             """)
             conn.commit()
         finally:
@@ -367,6 +380,130 @@ class PersonaMemory:
         finally:
             conn.close()
 
+    # --- Trigger Operations ---
+
+    def add_trigger(
+        self,
+        trigger_type: str,
+        fire_at: str,
+        context: str | None = None,
+        recurring: str | None = None,
+    ) -> int:
+        """
+        Schedule a trigger to fire at a specific time.
+
+        Args:
+            trigger_type: "reminder", "calendar", or "check_in"
+            fire_at: When to fire, as "YYYY-MM-DD HH:MM:SS" local time.
+            context: Human-readable description of why this trigger exists
+                (e.g. "pick up Tessa from work", "morning check-in").
+            recurring: Recurrence pattern string, or None for one-shot.
+                e.g. "hourly_6_to_23" for the standard check-in schedule.
+
+        Returns:
+            The database ID of the stored trigger.
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO triggers (type, fire_at, context, recurring, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (trigger_type, fire_at, context, recurring, now),
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def get_due_triggers(self) -> list[dict]:
+        """
+        Get all triggers that are due to fire (fire_at <= now, not yet fired).
+
+        Returns:
+            List of trigger dicts, ordered by fire_at ascending.
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, type, fire_at, context, recurring, created_at
+                FROM triggers
+                WHERE fire_at <= ? AND fired = FALSE
+                ORDER BY fire_at ASC
+                """,
+                (now,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def mark_trigger_fired(self, trigger_id: int):
+        """
+        Mark a one-shot trigger as fired so it won't fire again.
+        """
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE triggers SET fired = TRUE WHERE id = ?",
+                (trigger_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def advance_recurring_trigger(self, trigger_id: int, next_fire_at: str):
+        """
+        Advance a recurring trigger to its next fire time.
+
+        Instead of marking it fired, we update fire_at to the next
+        occurrence so it stays in the active trigger pool.
+
+        Args:
+            trigger_id: The trigger to advance.
+            next_fire_at: The next fire time as "YYYY-MM-DD HH:MM:SS".
+        """
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE triggers SET fire_at = ? WHERE id = ?",
+                (next_fire_at, trigger_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_active_triggers(self) -> list[dict]:
+        """
+        Get all triggers that haven't been permanently fired.
+        Useful for /status and debugging.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, type, fire_at, context, recurring, created_at
+                FROM triggers
+                WHERE fired = FALSE
+                ORDER BY fire_at ASC
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def delete_trigger(self, trigger_id: int):
+        """Remove a trigger entirely."""
+        conn = self._connect()
+        try:
+            conn.execute("DELETE FROM triggers WHERE id = ?", (trigger_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
     # --- Utility ---
 
     def get_unsummarized_messages(self) -> list[dict]:
@@ -391,6 +528,7 @@ class PersonaMemory:
         try:
             conn.execute("DELETE FROM messages")
             conn.execute("DELETE FROM summaries")
+            conn.execute("DELETE FROM triggers")
             conn.commit()
         finally:
             conn.close()

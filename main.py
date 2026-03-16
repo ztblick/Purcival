@@ -5,7 +5,7 @@ Run with:
     python main.py                          — pick persona interactively
     python main.py --persona purcival       — start as Purcival
     python main.py --provider claude        — use Claude instead of Ollama
-    python main.py -m "hello" --persona ada  — single message, then exit
+    python main.py -m "hello" --persona jocelyn  — single message, then exit
 """
 
 import argparse
@@ -13,9 +13,12 @@ import brain
 import config
 import personas
 
+from datetime import datetime
+from pathlib import Path
 from memory import PersonaMemory
 from context import assemble_context
 from summarizer import check_and_summarize
+from tokens import get_token_count
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -34,6 +37,61 @@ _theme = Theme({
 })
 
 console = Console(theme=_theme)
+
+# Debug output directory
+DEBUG_DIR = Path(__file__).parent / "debug"
+
+
+def _dump_prompt(
+    system_prompt: str,
+    messages: list[dict],
+    provider: str,
+    persona_name: str,
+):
+    """
+    Write the full assembled prompt to a timestamped file in debug/.
+
+    The file shows exactly what the LLM receives: the complete system
+    prompt (with all sections) and the full messages array. Useful for
+    inspecting which summaries were selected, how many messages are in
+    the window, and the total token count.
+    """
+    DEBUG_DIR.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"prompt_{persona_name}_{timestamp}.txt"
+    path = DEBUG_DIR / filename
+
+    system_tokens = get_token_count(system_prompt)
+    messages_tokens = sum(get_token_count(m["content"]) for m in messages)
+    total_tokens = system_tokens + messages_tokens
+
+    lines = [
+        f"=== PROMPT DEBUG — {persona_name} via {provider} ===",
+        f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"System prompt: ~{system_tokens} tokens",
+        f"Messages: {len(messages)} messages, ~{messages_tokens} tokens",
+        f"Total: ~{total_tokens} tokens",
+        "",
+        "=" * 60,
+        "SYSTEM PROMPT",
+        "=" * 60,
+        "",
+        system_prompt,
+        "",
+        "=" * 60,
+        f"MESSAGES ({len(messages)})",
+        "=" * 60,
+        "",
+    ]
+
+    for i, msg in enumerate(messages):
+        tokens = get_token_count(msg["content"])
+        lines.append(f"--- [{i+1}] {msg['role']} (~{tokens} tokens) ---")
+        lines.append(msg["content"])
+        lines.append("")
+
+    path.write_text("\n".join(lines))
+    return path
 
 
 def _print_response(text: str, provider: str, persona_name: str):
@@ -103,7 +161,7 @@ def _pick_persona() -> str:
         console.print(f"[error]Unknown persona: {choice}[/error]")
 
 
-def _print_banner(provider: str, persona_name: str, memory: PersonaMemory):
+def _print_banner(provider: str, persona_name: str, memory: PersonaMemory, debug: bool = False):
     """Print the startup banner."""
     total = memory.get_message_count()
     memory_status = f"{total} messages in memory" if total > 0 else "fresh start"
@@ -113,12 +171,14 @@ def _print_banner(provider: str, persona_name: str, memory: PersonaMemory):
         f"Persona:  [persona]{persona_name}[/persona]\n"
         f"Provider: [assistant]{provider}[/assistant]\n"
         f"Memory:   [status]{memory_status}[/status]\n"
+        f"Debug:    [status]{'ON' if debug else 'off'}[/status]\n"
         "\n"
         "[status]Commands:[/status]\n"
         "  /claude   — switch to Claude\n"
         "  /ollama   — switch to Ollama\n"
         "  /persona  — switch persona\n"
         "  /status   — show current state\n"
+        "  /debug    — toggle prompt dumping to debug/\n"
         "  clear     — reset conversation (erases memory!)\n"
         "  quit      — exit"
     )
@@ -126,7 +186,7 @@ def _print_banner(provider: str, persona_name: str, memory: PersonaMemory):
     console.print()
 
 
-def chat_loop(provider: str, persona_name: str):
+def chat_loop(provider: str, persona_name: str, debug: bool = False):
     """
     Interactive conversation in the terminal.
 
@@ -136,7 +196,7 @@ def chat_loop(provider: str, persona_name: str):
     """
     persona_prompt = personas.load_persona(persona_name)
     memory = PersonaMemory(persona_name)
-    _print_banner(provider, persona_name, memory)
+    _print_banner(provider, persona_name, memory, debug)
 
     while True:
         try:
@@ -153,8 +213,20 @@ def chat_loop(provider: str, persona_name: str):
             break
 
         if user_input.lower() == "clear":
-            memory.clear_history()
-            console.print("[system]— conversation history erased —[/system]\n")
+            total = memory.get_message_count()
+            summaries = len(memory.get_all_summaries())
+            console.print(
+                f"[error]This will permanently delete {total} messages "
+                f"and {summaries} summaries for {persona_name}.[/error]"
+            )
+            confirm = console.input(
+                "[error]Type 'yes' to confirm:[/error] "
+            ).strip().lower()
+            if confirm == "yes":
+                memory.clear_history()
+                console.print("[system]— conversation history erased —[/system]\n")
+            else:
+                console.print("[system]— clear cancelled —[/system]\n")
             continue
 
         # --- Provider switching ---
@@ -192,7 +264,15 @@ def chat_loop(provider: str, persona_name: str):
             console.print(f"  [status]Provider:[/status]  [assistant]{provider}[/assistant]")
             console.print(f"  [status]Model:[/status]     {model}")
             console.print(f"  [status]Messages:[/status]  {total} stored")
-            console.print(f"  [status]Summaries:[/status] {summaries}\n")
+            console.print(f"  [status]Summaries:[/status] {summaries}")
+            console.print(f"  [status]Debug:[/status]     {'ON' if debug else 'off'}\n")
+            continue
+
+        # --- Debug toggle ---
+        if user_input.lower() == "/debug":
+            debug = not debug
+            state = "ON — prompts will be saved to debug/" if debug else "off"
+            console.print(f"[system]— debug {state} —[/system]\n")
             continue
 
         # --- Send message ---
@@ -201,6 +281,11 @@ def chat_loop(provider: str, persona_name: str):
 
         # Assemble full context: system prompt + recent messages
         system_prompt, messages = assemble_context(persona_prompt, memory)
+
+        # Dump the full prompt to a file if debug is on
+        if debug:
+            path = _dump_prompt(system_prompt, messages, provider, persona_name)
+            console.print(f"[status]  Debug: prompt saved to {path}[/status]")
 
         with console.status("[status]Thinking...[/status]", spinner="dots"):
             try:
@@ -226,10 +311,11 @@ def chat_loop(provider: str, persona_name: str):
                 "[status]Committing conversation to memory...[/status]",
                 spinner="dots",
             ):
-                summarized = check_and_summarize(memory)
-            if summarized:
+                count = check_and_summarize(memory)
+            if count > 0:
+                label = "summary" if count == 1 else "summaries"
                 console.print(
-                    "[status]— older messages summarized and stored in memory —[/status]\n"
+                    f"[status]— {count} {label} stored in memory —[/status]\n"
                 )
         except Exception as e:
             console.print(f"[error]Summarization error: {e}[/error]\n")
@@ -284,6 +370,11 @@ if __name__ == "__main__":
         default=None,
         help="Persona to use (e.g. purcival, ada, default)",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable prompt dumping — saves full prompts to debug/",
+    )
     args = parser.parse_args()
 
     # Determine persona — from flag, env, or interactive picker
@@ -303,4 +394,4 @@ if __name__ == "__main__":
     if args.message:
         single_message(args.message, args.provider, persona_name)
     else:
-        chat_loop(args.provider, persona_name)
+        chat_loop(args.provider, persona_name, debug=args.debug)

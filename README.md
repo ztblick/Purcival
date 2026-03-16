@@ -33,9 +33,14 @@ Your phone (Telegram)                         Your Linux box
     │            │ Send response to user    │       │
     │            │ Check if summarization   │       │
     │            │   needed → if so:        │       │
-    │            │   Summarize old messages  │──→ Ollama (local, always)
+    │            │   Summarize old messages  │──→ Claude API (always)
     │            │   Embed summary           │──→ nomic-embed-text
     │            │   Store summary + vector  │──→ memory.db
+    │            │                          │       │
+    │            │ Proactive scheduler:      │       │
+    │            │   Check triggers every 60s│       │
+    │            │   If due → compose msg ──┼──→ Ollama or Claude
+    │            │   Send to user            │       │
     │            └──────────────────────────┘       │
 ```
 
@@ -70,14 +75,16 @@ cp .env.example .env
 python main.py                          # pick persona interactively
 python main.py --persona purcival       # jump straight in
 python main.py --provider claude        # use Claude instead of Ollama
+python main.py --debug                  # dump full prompts to debug/
 python main.py -m "hello" --persona ada # single message
 ```
 
-Terminal commands: `/persona`, `/claude`, `/ollama`, `/status`, `clear`, `quit`
+Terminal commands: `/persona`, `/claude`, `/ollama`, `/status`, `/debug`, `clear`, `quit`
 
 The terminal interface shows a spinner when summarization is running
 ("Committing conversation to memory...") and allows longer, more detailed
-responses from the LLM.
+responses from the LLM. The `clear` command requires typed confirmation
+before deleting data.
 
 ### Telegram (for daily use from your phone)
 
@@ -94,10 +101,11 @@ sudo systemctl start purcival@ada
 sudo systemctl enable purcival@ada
 ```
 
-Telegram commands: `/start`, `/provider`, `/status`, `/clear`
+Telegram commands: `/start`, `/provider`, `/status`
 
 The Telegram interface instructs the LLM to keep responses concise and
-scannable for mobile reading.
+scannable for mobile reading. The `/clear` command is disabled on Telegram
+to prevent accidental data loss — use the terminal interface to clear history.
 
 ### Setting up Telegram
 
@@ -163,9 +171,9 @@ persona gets a fresh, independent memory database automatically.
 ## Memory system
 
 Purcival uses a three-tier persistent memory system. Every conversation is
-stored, older conversations are automatically compressed into summaries,
-and relevant summaries are retrieved via semantic search to give each
-persona long-term memory.
+stored, older conversations are automatically compressed into summaries
+(using Claude for quality), and relevant summaries are retrieved via semantic
+search to give each persona long-term memory.
 
 ### Data layout
 
@@ -173,9 +181,9 @@ persona long-term memory.
 data/
 ├── user_context.md          ← shared context about you (manually maintained)
 ├── purcival/
-│   └── memory.db            ← Purcival's messages, summaries, and embeddings
+│   └── memory.db            ← Purcival's messages, summaries, embeddings, triggers
 ├── ada/
-│   └── memory.db            ← Ada's messages, summaries, and embeddings
+│   └── memory.db            ← Ada's messages, summaries, embeddings, triggers
 └── jo/
     └── memory.db
 ```
@@ -195,11 +203,10 @@ maintained. Read by all personas. Contains background information that
 doesn't change often: family, career, values, interests.
 
 **Tier 2: Conversation summaries** (SQLite `summaries` table) — automatically
-generated condensations of older conversations. Each summary is stored with
-a vector embedding for semantic search. When a new message arrives, the
-system embeds the message, finds the most similar stored summaries, and
-includes them in the prompt. This gives each persona long-term memory of
-past conversations without needing to send the entire history on every call.
+generated condensations of older conversations using Claude. Each summary is
+stored with a vector embedding for semantic search. When a new message
+arrives, the system embeds the message, finds the most similar stored
+summaries, and includes them in the prompt.
 
 **Tier 3: Verbatim messages** (SQLite `messages` table) — the full record
 of every message exchanged, timestamped in local time. Recent messages are
@@ -219,22 +226,22 @@ System prompt:
   5. Additional context      (< 8,000 tokens)  — reserved for future integrations
 
 Messages array:
-  6. Recent verbatim messages (< 32,000 tokens) — with timestamps on user messages
+  6. Recent verbatim messages (< 8,000 tokens)  — with timestamps on user messages
 ```
 
-Target total budget: 32,000–64,000 tokens per call.
+Typical total: ~20,000 tokens. Upper bound: ~32,000 tokens. The verbatim
+message window is deliberately moderate — this is the largest cost driver
+since it's sent on every API call. Older messages are covered by summaries.
 
 ### Summarization
 
 Summarization triggers after a response when unsummarized messages exceed
-a token threshold (~24,000 tokens). The oldest batch of messages is sent to
-the local LLM with a summarization prompt, the result is embedded with
-`nomic-embed-text`, and both are stored in the database. Summarization
-always uses the local model to avoid burning API credits.
-
-The summarization prompt instructs the model to write natural paragraphs
-(not bullet points), include timestamps, and never invent details that
-weren't discussed.
+6,000 tokens. Multiple batches (up to 5) can be processed in a single pass
+to catch up on backlogs. Each batch (~3,000 tokens, roughly 15-25 exchanges)
+becomes one summary. Summarization always uses Claude for quality — local
+models did not meet the accuracy bar. The summarization prompt instructs
+the model to write natural paragraphs, include timestamps, and never invent
+details that weren't discussed.
 
 ### Retrieval
 
@@ -244,39 +251,74 @@ similarity threshold (0.35) are excluded. The 2 most recent summaries
 are always included regardless of similarity to maintain conversational
 continuity. Up to 8 summaries can be retrieved per message.
 
+## Proactive messaging
+
+Each persona can initiate conversations via Telegram on a schedule.
+Hourly check-in triggers fire from 6am to 11pm. When a trigger fires,
+the decision gate checks whether to actually send a message:
+
+- **Reminders** → always send
+- **Calendar events** → always send
+- **Check-ins** → skip if conversation was active in the last 15 minutes
+
+If the gate approves, the message composer assembles context (including
+the current time, time since last message, and trigger-specific instructions)
+and asks the LLM to compose a natural proactive message. The message is
+persisted to the database so the conversation continues naturally if the
+user replies.
+
+Triggers are stored in the persona's SQLite database and survive restarts.
+New hourly triggers are seeded automatically on bot startup.
+
+## Debug mode
+
+The terminal interface supports prompt dumping for inspecting exactly what
+the LLM receives on each message.
+
+```bash
+# Start with debug on
+python main.py --persona purcival --debug
+
+# Or toggle mid-session
+/debug
+```
+
+Debug dumps are saved to `debug/` as timestamped text files containing
+the full system prompt (with all sections and retrieved summaries),
+every message in the array with individual token counts, and a total
+token breakdown.
+
 ## Project structure
 
 ```
 purcival/
-├── main.py              Terminal UI — persona picker, chat loop
+├── main.py              Terminal UI — persona picker, chat loop, debug mode
 ├── run_telegram.py      Telegram entry point — one persona per process
-├── telegram_bot.py      Telegram bot logic — long polling, message handling
+├── telegram_bot.py      PersonaBot class — messaging, proactive scheduler
 ├── brain.py             LLM interface — routes to Claude or Ollama
 ├── context.py           Context assembly — builds full prompts from all sources
-├── memory.py            Persistent storage — SQLite, messages, summaries, embeddings
+├── memory.py            Persistent storage — messages, summaries, embeddings, triggers
 ├── embeddings.py        Vector embeddings — generates embeddings via Ollama
-├── summarizer.py        Summarization engine — compresses old conversations
+├── summarizer.py        Summarization engine — compresses old conversations via Claude
+├── proactive.py         Proactive messaging — scheduler, decision gate, composer
 ├── tokens.py            Token counting — abstract interface for budget enforcement
 ├── config.py            Loads settings from .env
 ├── personas.py          Discovers and loads persona files
 ├── personas/            Personality definitions (markdown)
 ├── data/                Per-persona databases + shared user context (gitignored)
+├── debug/               Prompt dumps from debug mode (gitignored)
+├── tests/               Test suite (future: consolidate all tests here)
 ├── purcival@.service    Systemd template for background services
 ├── requirements.txt     Python dependencies
-├── test_memory.py       Tests for the database layer
-├── test_persistence.py  Integration tests for message persistence
-├── test_context.py      Tests for context assembly
-├── test_embeddings.py   Tests for the embedding module
-├── test_summarizer.py   Tests for the summarization engine
-├── test_retrieval.py    Tests for semantic summary retrieval
 ├── .env.example         Configuration template
-└── .gitignore           Keeps secrets, data, and artifacts out of git
+└── .gitignore           Keeps secrets, data, debug dumps, and artifacts out of git
 ```
 
 ## Dual-model architecture
 
 **Claude** (via Anthropic API) — highest quality, costs per token, requires
-internet. Switch to it with `/provider claude` in Telegram.
+internet. Switch to it with `/provider claude` in Telegram. Also used for
+summarization regardless of active chat provider.
 
 **Ollama** (local inference) — free, private, runs on your GPU. Purcival
 currently runs Mistral Small 3.2 on an RTX 3060 (12GB VRAM). A separate
@@ -284,19 +326,7 @@ embedding model (`nomic-embed-text`, ~270MB) runs on CPU for memory
 retrieval without competing for GPU VRAM.
 
 Both use the same message format. The brain module abstracts the provider
-so nothing else in the app knows which model is responding. Summarization
-always uses the local model regardless of which provider is active for chat.
-
-## Running tests
-
-```bash
-python test_memory.py        # database layer
-python test_persistence.py   # message persistence across restarts
-python test_context.py       # context assembly and token budgets
-python test_embeddings.py    # embedding generation (live tests need Ollama)
-python test_summarizer.py    # summarization engine (live tests need Ollama)
-python test_retrieval.py     # semantic retrieval (live tests need Ollama)
-```
+so nothing else in the app knows which model is responding.
 
 ## Configuration
 
@@ -328,13 +358,18 @@ TELEGRAM_TOKEN_JO=
 - [x] Shared user context (`user_context.md`)
 - [x] Context assembly — full prompts from persona + context + history
 - [x] Embedding infrastructure — vector similarity via nomic-embed-text
-- [x] Conversation summarization — compress older conversations automatically
-- [x] Semantic retrieval — surface relevant past conversations in new chats
+- [x] Conversation summarization — via Claude for quality
+- [x] Semantic retrieval — surface relevant past conversations
 - [x] Timestamps — local time on all messages and summaries
 - [x] Device-aware responses — concise on Telegram, detailed in terminal
-- [ ] Scheduled triggers — proactive messages (morning briefings, reminders)
+- [x] Proactive messaging — scheduled wake-ups with decision gate
+- [x] Debug mode — dump full prompts for inspection
+- [x] Cost optimization — balanced token budgets (~20K typical)
+- [x] Safe clear — disabled on Telegram, confirmation required on CLI
+- [ ] Organize tests into tests/ directory
 - [ ] Google Calendar integration (read-only)
 - [ ] Gmail integration (read-only)
+- [ ] Reminder parsing — teach LLM to create triggers from natural language
 
 ## Requirements
 

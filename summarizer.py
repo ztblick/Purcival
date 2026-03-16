@@ -30,18 +30,29 @@ logger = logging.getLogger(__name__)
 # --- Configuration ---
 
 # Summarize when unsummarized messages exceed this many tokens.
-# This should be well below the context window to trigger before
-# old messages would be pushed out of the verbatim window.
-SUMMARIZE_THRESHOLD_TOKENS = 24_000
+# This should trigger before messages would overflow the verbatim
+# window (BUDGET_MESSAGES = 8,000 in context.py). Setting it at
+# 6,000 means summarization fires just before the window fills,
+# keeping a comfortable buffer.
+SUMMARIZE_THRESHOLD_TOKENS = 6_000
 
 # How many tokens of messages to include in each summary batch.
-# We take roughly half the threshold, leaving the other half as
-# recent messages that stay verbatim in the next prompt.
-SUMMARIZE_BATCH_TOKENS = 12_000
+# Each batch becomes one summary. Smaller batches = more granular
+# summaries = better retrieval precision, but more API calls.
+# 3,000 tokens ≈ 15-25 exchanges, which is a natural "topic chunk."
+SUMMARIZE_BATCH_TOKENS = 3_000
 
-# Always use local inference for summarization — never burn API
-# credits on a background task.
-SUMMARIZE_PROVIDER = "ollama"
+# Maximum number of summary batches to process in one pass.
+# Prevents runaway summarization from blocking the bot for too long
+# when catching up on a large backlog. Remaining batches will be
+# processed on subsequent messages.
+MAX_BATCHES_PER_PASS = 5
+
+# Use Claude for summarization. Local models have not met the quality
+# bar for accurate, hallucination-free summaries. Summarization is
+# infrequent (every ~24K tokens of conversation) so API cost stays low,
+# and summary quality compounds over time as the database grows.
+SUMMARIZE_PROVIDER = "claude"
 
 # --- Summarization Prompt ---
 
@@ -135,43 +146,18 @@ def _generate_summary(messages: list[dict]) -> str:
     return summary.strip()
 
 
-def check_and_summarize(memory: PersonaMemory) -> bool:
+def _summarize_one_batch(memory: PersonaMemory, unsummarized: list[dict]) -> bool:
     """
-    Check if summarization is needed and run it if so.
+    Summarize a single batch from the front of the unsummarized messages.
 
-    This is the function that telegram_bot.py and main.py call
-    after every response. It checks the unsummarized message count,
-    and if it exceeds the threshold, generates a summary of the
-    oldest batch.
-
-    Args:
-        memory: The persona's memory instance.
-
-    Returns:
-        True if a summary was generated, False if not needed.
+    Returns True if a summary was generated, False on failure.
     """
-    unsummarized = memory.get_unsummarized_messages()
-
-    # Count tokens in unsummarized messages
-    total_tokens = sum(get_token_count(m["content"]) for m in unsummarized)
-
-    if total_tokens < SUMMARIZE_THRESHOLD_TOKENS:
-        return False
-
-    logger.info(
-        f"Summarization triggered: {total_tokens} tokens unsummarized "
-        f"(threshold: {SUMMARIZE_THRESHOLD_TOKENS})"
-    )
-
-    # Select the oldest batch to summarize
     batch = _select_batch(unsummarized, SUMMARIZE_BATCH_TOKENS)
 
     if len(batch) < 2:
-        # Need at least one exchange to make a meaningful summary
         logger.warning("Batch too small to summarize, skipping.")
         return False
 
-    # Record the message ID range this summary will cover
     message_start = batch[0]["id"]
     message_end = batch[-1]["id"]
 
@@ -191,8 +177,6 @@ def check_and_summarize(memory: PersonaMemory) -> bool:
         embedding = get_embedding(summary_text)
     except Exception as e:
         logger.error(f"Summary embedding failed: {e}")
-        # Store the summary without an embedding — it won't be
-        # searchable, but it's better than losing it entirely.
         memory.add_summary(
             summary=summary_text,
             message_start=message_start,
@@ -217,3 +201,43 @@ def check_and_summarize(memory: PersonaMemory) -> bool:
     )
 
     return True
+
+
+def check_and_summarize(memory: PersonaMemory) -> int:
+    """
+    Check if summarization is needed and process batches until caught up.
+
+    Processes up to MAX_BATCHES_PER_PASS batches in one call. This handles
+    both the normal case (one batch every ~30 messages) and the backlog
+    case (120 unsummarized messages that need ~4 batches). Remaining
+    batches will be processed on subsequent messages.
+
+    Args:
+        memory: The persona's memory instance.
+
+    Returns:
+        Number of summaries generated (0 if not needed).
+    """
+    summaries_created = 0
+
+    for _ in range(MAX_BATCHES_PER_PASS):
+        # Re-fetch unsummarized messages each iteration since the
+        # previous batch moved the cursor forward.
+        unsummarized = memory.get_unsummarized_messages()
+        total_tokens = sum(get_token_count(m["content"]) for m in unsummarized)
+
+        if total_tokens < SUMMARIZE_THRESHOLD_TOKENS:
+            break
+
+        logger.info(
+            f"Summarization pass: {total_tokens} tokens unsummarized "
+            f"(threshold: {SUMMARIZE_THRESHOLD_TOKENS})"
+        )
+
+        success = _summarize_one_batch(memory, unsummarized)
+        if success:
+            summaries_created += 1
+        else:
+            break  # Don't keep trying if a batch failed
+
+    return summaries_created
