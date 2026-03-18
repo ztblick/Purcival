@@ -158,7 +158,7 @@ bot, its own process, and its own memory database.
 
 ```
 personas/
-├── jo.md          — English butler, detail-oriented life manager (agent-enabled)
+├── jo.md          — Detail-oriented life manager (agent-enabled)
 └── ada.md         — Spunky technical sparring partner
 ```
 
