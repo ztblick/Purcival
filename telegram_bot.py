@@ -51,75 +51,9 @@ from memory import PersonaMemory
 from context import assemble_context, DEVICE_TELEGRAM
 from summarizer import check_and_summarize
 from proactive import start_scheduler, ensure_agent_has_plan
+from agent import strip_schedule_updates, apply_schedule_updates
 
 logger = logging.getLogger(__name__)
-
-
-def _strip_schedule_updates(response: str) -> tuple[str, list[str]]:
-    """
-    Strip <schedule_updates> tags from an LLM response.
-
-    Returns (clean_response, schedule_lines).
-    The clean_response has the tags removed and is what the user sees.
-    The schedule_lines are the raw lines inside the tags for parsing.
-
-    If no tags are present, returns (response, []).
-    """
-    pattern = r"<schedule_updates>(.*?)</schedule_updates>"
-    match = re.search(pattern, response, re.DOTALL)
-
-    if not match:
-        return response.strip(), []
-
-    # Extract the schedule commands
-    schedule_block = match.group(1).strip()
-    schedule_lines = [
-        line.strip() for line in schedule_block.split("\n")
-        if line.strip()
-    ]
-
-    # Remove the tags from the response
-    clean = response[:match.start()] + response[match.end():]
-    clean = clean.strip()
-
-    return clean, schedule_lines
-
-
-def _apply_schedule_updates(schedule_lines: list[str], memory: PersonaMemory):
-    """
-    Parse and apply schedule update commands from the LLM's response.
-
-    Uses the same parsing logic as the agent cycle for consistency.
-    Invalid commands are logged and skipped — the user's response is
-    already sent by the time this runs, so failures are silent.
-    """
-    from agent import _parse_schedule_line, _validate_schedule_change
-    from tools import create_tools
-
-    tools = create_tools(memory)
-    schedule_config = memory.get_schedule_config()
-    registered_tools = set(tools.keys())
-
-    for line in schedule_lines:
-        parsed = _parse_schedule_line(line)
-        if not parsed:
-            logger.warning(f"Failed to parse schedule update: {line[:100]}")
-            continue
-
-        valid, reason = _validate_schedule_change(
-            parsed, memory, schedule_config, registered_tools
-        )
-
-        if valid:
-            schedule_tool = tools.get("schedule")
-            if schedule_tool:
-                try:
-                    result = schedule_tool.execute(parsed["method"], **parsed["kwargs"])
-                    logger.info(f"Schedule update applied: {result}")
-                except Exception as e:
-                    logger.error(f"Schedule update failed: {e}")
-        else:
-            logger.warning(f"Schedule update rejected: {reason} ({line[:80]})")
 
 
 class PersonaBot:
@@ -286,10 +220,10 @@ class PersonaBot:
             await update.message.reply_text(f"Error: {e}")
             return
 
-        # Stage 5: Strip schedule updates before sending to user.
+        # Strip schedule updates before sending to user.
         # The LLM may include <schedule_updates> tags when it detects
         # the user's message affects its plan.
-        clean_response, schedule_lines = _strip_schedule_updates(response)
+        clean_response, schedule_lines = strip_schedule_updates(response)
 
         # Persist the clean response (without schedule tags)
         self.memory.add_message("assistant", clean_response)
@@ -305,10 +239,10 @@ class PersonaBot:
             for i in range(0, len(clean_response), 4096):
                 await update.message.reply_text(clean_response[i:i + 4096])
 
-        # Stage 5: Apply schedule updates silently
+        # Apply schedule updates silently
         if schedule_lines:
             logger.info(f"Applying {len(schedule_lines)} schedule updates from user conversation")
-            _apply_schedule_updates(schedule_lines, self.memory)
+            apply_schedule_updates(schedule_lines, self.memory)
 
         # Check if older messages need summarization.
         # This runs AFTER the response is sent, so the user never waits.

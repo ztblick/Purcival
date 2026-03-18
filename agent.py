@@ -10,11 +10,11 @@ The cycle:
     1. Load state (trigger context, narrative, plan, proposals)
     2. Perceive (run tools, no LLM)
     3. Check pending proposals
-    4. Should we reason? (skip gate)
-    5. Reason (LLM call)
-    6. Validate + Act
-    7. Apply schedule changes
-    8. Update state
+    4. Reason (LLM call — always)
+    5. Validate + Act
+    6. Apply schedule changes
+    7. Update state
+    8. Safety net
     9. Done
 
 The agent manages its own schedule — it decides when to wake up next
@@ -350,6 +350,7 @@ def _build_agent_prompt(
     persona_prompt: str,
     narrative_state: str | None,
     trigger_purpose: str,
+    trigger_time: str | None,
     tool_contexts: dict[str, str],
     scheduled_plan: str | None,
     pending_proposals: list[dict],
@@ -377,7 +378,12 @@ def _build_agent_prompt(
         user_ctx = _truncate_to_budget(user_ctx, BUDGET_USER_CONTEXT)
         sections.append(f"## ABOUT THE USER\n\n{user_ctx}")
 
-    # 3. Narrative state
+    # 3. Current time
+    now = datetime.now()
+    time_str = now.strftime("%A, %B %d, %Y at %I:%M %p")
+    sections.append(f"## CURRENT TIME\n\n{time_str}")
+
+    # 4. Narrative state
     if narrative_state:
         sections.append(f"## YOUR CURRENT STATE\n\n{narrative_state}")
     else:
@@ -386,10 +392,22 @@ def _build_agent_prompt(
             "This is your first cycle. You have no previous state."
         )
 
-    # 4. Why the agent is awake
-    sections.append(f"## WHY YOU ARE AWAKE\n\n{trigger_purpose}")
+    # 5. Why the agent is awake — now includes the scheduled time
+    wake_section = trigger_purpose
+    if trigger_time:
+        try:
+            fire_dt = datetime.strptime(trigger_time, "%Y-%m-%d %H:%M:%S")
+            formatted_time = fire_dt.strftime("%I:%M %p").lstrip("0")
+            wake_section = (
+                f"Scheduled wake-up time: {formatted_time}\n\n"
+                f"{trigger_purpose}"
+            )
+        except ValueError:
+            # Unparseable time — just use the purpose
+            pass
+    sections.append(f"## WHY YOU ARE AWAKE\n\n{wake_section}")
 
-    # 5. Tool perceptions
+    # 6. Tool perceptions
     if tool_contexts:
         perception_parts = []
         for tool_name, context in tool_contexts.items():
@@ -398,7 +416,7 @@ def _build_agent_prompt(
             "## WHAT YOU PERCEIVE\n\n" + "\n\n".join(perception_parts)
         )
 
-    # 6. Scheduled plan
+    # 7. Scheduled plan
     if scheduled_plan:
         sections.append(f"## YOUR SCHEDULED PLAN\n\n{scheduled_plan}")
     else:
@@ -408,7 +426,7 @@ def _build_agent_prompt(
             "Consider planning your day."
         )
 
-    # 7. Pending proposals
+    # 8. Pending proposals
     if pending_proposals:
         proposal_lines = ["The following actions are awaiting user approval:"]
         for p in pending_proposals:
@@ -420,7 +438,7 @@ def _build_agent_prompt(
             "## PENDING PROPOSALS\n\n" + "\n".join(proposal_lines)
         )
 
-    # 8. Available actions + budget
+    # 9. Available actions + budget
     budget_info = ""
     if schedule_config:
         max_actions = schedule_config.get("max_actions_per_day", 25)
@@ -643,8 +661,8 @@ async def run_agent_cycle(
 
     This is the function that replaces _process_trigger in proactive.py.
     It runs the full 9-step cycle: housekeeping, load state, perceive,
-    check proposals, reason (maybe), validate + act, apply schedule
-    changes, update state, done.
+    check proposals, reason, validate + act, apply schedule changes,
+    update state, done.
 
     Args:
         trigger: The trigger dict that started this cycle.
@@ -669,6 +687,7 @@ async def run_agent_cycle(
     trigger_context = _parse_trigger_context(trigger)
     trigger_purpose = trigger_context.get("purpose", "Scheduled check-in")
     trigger_tools = trigger_context.get("tools", [])
+    trigger_time = trigger.get("fire_at")
 
     # Empty tools list = planning cycle (load all tools).
     # Specific tools list = targeted cycle (load only those).
@@ -724,16 +743,7 @@ async def run_agent_cycle(
     # This requires scanning recent messages for approval keywords.
     # Deferred to integration step — for now, proposals just persist.
 
-    # --- Step 4: Should we reason? ---
-    # Yes. Always. The agent scheduled this wake-up for a reason —
-    # the purpose field IS the context. Even if no tool returned new
-    # data, the agent still needs to reason about its purpose, its
-    # narrative state, and recent conversations.
-    #
-    # The only case where we don't reason is if the LLM call fails
-    # (handled in step 5).
-
-    # --- Step 5: Reason ---
+    # --- Step 4: Reason ---
     # Build the available actions description
     available_actions = _format_available_actions(tools)
 
@@ -742,6 +752,7 @@ async def run_agent_cycle(
         persona_prompt=persona_prompt,
         narrative_state=narrative_state,
         trigger_purpose=trigger_purpose,
+        trigger_time=trigger_time,
         tool_contexts=tool_contexts,
         scheduled_plan=schedule_plan,
         pending_proposals=pending_proposals,
@@ -806,7 +817,7 @@ async def run_agent_cycle(
     parsed_schedule = [_parse_schedule_line(line) for line in schedule_lines]
     parsed_schedule = [s for s in parsed_schedule if s is not None]
 
-    # --- Step 6: Validate + Act ---
+    # --- Step 5: Validate + Act ---
     actions_taken = []
 
     for action in parsed_actions:
@@ -914,7 +925,7 @@ async def run_agent_cycle(
             })
             logger.warning(f"Cycle {cycle_id}: action rejected: {reason}")
 
-    # --- Step 7: Apply Schedule Changes ---
+    # --- Step 6: Apply Schedule Changes ---
     schedule_changes_applied = []
     registered_tool_names = set(tools.keys())
 
@@ -952,7 +963,7 @@ async def run_agent_cycle(
                 f"({change['raw'][:80]})"
             )
 
-    # --- Step 8: Update State ---
+    # --- Step 7: Update State ---
 
     # Save narrative state (use new if provided, otherwise keep old)
     if narrative_out:
@@ -976,7 +987,7 @@ async def run_agent_cycle(
         provider=AGENT_REASONING_PROVIDER,
     )
 
-    # --- Step 9: Ensure future plan exists ---
+    # --- Step 8: Ensure future plan exists ---
     _ensure_future_plan(memory, tools, schedule_config)
 
     logger.info(
@@ -1082,3 +1093,104 @@ def _ensure_future_plan(
         recurring=None,
     )
     logger.info(f"Safety net: agent forgot to plan, seeded for {tomorrow_start}")
+
+
+# --- Schedule Updates in Conversation Responses ---
+
+def strip_schedule_updates(response: str) -> tuple[str, list[str]]:
+    """
+    Strip <schedule_updates> tags from an LLM response.
+
+    Returns (clean_response, schedule_lines).
+    The clean_response has the tags removed and is what the user sees.
+    The schedule_lines are the raw lines inside the tags for parsing.
+
+    If no tags are present, returns (response, []).
+
+    Used by both the terminal (main.py) and Telegram (telegram_bot.py)
+    paths to handle schedule updates embedded in conversation responses.
+    """
+    pattern = r"<schedule_updates>(.*?)</schedule_updates>"
+    match = re.search(pattern, response, re.DOTALL)
+
+    if not match:
+        return response.strip(), []
+
+    # Extract the schedule commands
+    schedule_block = match.group(1).strip()
+    schedule_lines = [
+        line.strip() for line in schedule_block.split("\n")
+        if line.strip()
+    ]
+
+    # Remove the tags from the response
+    clean = response[:match.start()] + response[match.end():]
+    clean = clean.strip()
+
+    return clean, schedule_lines
+
+
+def apply_schedule_updates(schedule_lines: list[str], memory: PersonaMemory) -> list[dict]:
+    """
+    Parse and apply schedule update commands from an LLM response.
+
+    Uses the same parsing and validation logic as the agent cycle.
+    Invalid commands are logged and skipped.
+
+    Args:
+        schedule_lines: Raw schedule command strings from the LLM.
+        memory: The persona's memory instance.
+
+    Returns:
+        List of result dicts with 'change', 'status', and optionally
+        'result' or 'reason' for each command processed.
+    """
+    from tools import create_tools
+
+    tools = create_tools(memory)
+    schedule_config = memory.get_schedule_config()
+    registered_tools = set(tools.keys())
+    results = []
+
+    for line in schedule_lines:
+        parsed = _parse_schedule_line(line)
+        if not parsed:
+            logger.warning(f"Failed to parse schedule update: {line[:100]}")
+            results.append({
+                "change": line,
+                "status": "failed",
+                "reason": "parse error",
+            })
+            continue
+
+        valid, reason = _validate_schedule_change(
+            parsed, memory, schedule_config, registered_tools
+        )
+
+        if valid:
+            schedule_tool = tools.get("schedule")
+            if schedule_tool:
+                try:
+                    result = schedule_tool.execute(parsed["method"], **parsed["kwargs"])
+                    logger.info(f"Schedule update applied: {result}")
+                    results.append({
+                        "change": line,
+                        "status": "applied",
+                        "result": result,
+                    })
+                except Exception as e:
+                    logger.error(f"Schedule update failed: {e}")
+                    results.append({
+                        "change": line,
+                        "status": "failed",
+                        "reason": str(e),
+                    })
+        else:
+            logger.warning(f"Schedule update rejected: {reason} ({line[:80]})")
+            results.append({
+                "change": line,
+                "status": "rejected",
+                "reason": reason,
+            })
+
+    return results

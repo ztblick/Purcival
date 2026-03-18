@@ -600,10 +600,12 @@ class PersonaMemory:
         """
         Delete all unfired agent_cycle triggers.
 
-        Called when the schedule changes via /schedule so the agent's
-        plan can be rebuilt from scratch with the new config. This
-        clears both the old recurring check-ins AND the agent's
-        self-scheduled wake-ups.
+        WARNING: This is a sledgehammer — it removes the agent's entire
+        plan including targeted wake-ups (pre-meeting reminders, user-
+        requested reminders, etc.). Only use for a full reset.
+
+        For schedule config changes, use reschedule_planning_cycles()
+        instead, which preserves targeted wake-ups.
         """
         conn = self._connect()
         try:
@@ -615,6 +617,51 @@ class PersonaMemory:
                 """
             )
             conn.commit()
+        finally:
+            conn.close()
+
+    def reschedule_planning_cycles(self) -> int:
+        """
+        Remove all planning-cycle triggers. Preserves all targeted
+        wake-ups (the agent's reminders, meeting prep, etc.).
+
+        Called when operating hours change via /schedule. The old
+        planning cycles are stale — the agent will create new ones
+        at the new start_time via ensure_agent_has_plan().
+
+        A planning cycle is identified by having an empty tools list
+        in its JSON context: {"tools": []}. Targeted wake-ups have
+        specific tools listed: {"tools": ["telegram", "calendar"]}.
+
+        Returns:
+            Number of planning cycles removed.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, context
+                FROM triggers
+                WHERE fired = FALSE AND type = 'agent_cycle'
+                """
+            ).fetchall()
+
+            ids_to_delete = []
+            for row in rows:
+                try:
+                    ctx = json.loads(row["context"]) if row["context"] else {}
+                    tools = ctx.get("tools", [])
+                    if len(tools) == 0:
+                        ids_to_delete.append(row["id"])
+                except (json.JSONDecodeError, TypeError):
+                    # Legacy trigger or unparseable — leave it alone
+                    continue
+
+            for trigger_id in ids_to_delete:
+                conn.execute("DELETE FROM triggers WHERE id = ?", (trigger_id,))
+
+            conn.commit()
+            return len(ids_to_delete)
         finally:
             conn.close()
 

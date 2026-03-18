@@ -596,13 +596,13 @@ class TestScheduleUpdatesStripping:
     """Test the <schedule_updates> tag stripping in telegram_bot."""
 
     def test_no_tags(self):
-        from telegram_bot import _strip_schedule_updates
-        clean, lines = _strip_schedule_updates("Just a normal response.")
+        from telegram_bot import strip_schedule_updates
+        clean, lines = strip_schedule_updates("Just a normal response.")
         assert clean == "Just a normal response."
         assert lines == []
 
     def test_with_tags(self):
-        from telegram_bot import _strip_schedule_updates
+        from telegram_bot import strip_schedule_updates
         response = (
             "Got it, I'll adjust my reminders.\n\n"
             "<schedule_updates>\n"
@@ -610,7 +610,7 @@ class TestScheduleUpdatesStripping:
             "schedule.cancel_wakeup(id=43)\n"
             "</schedule_updates>"
         )
-        clean, lines = _strip_schedule_updates(response)
+        clean, lines = strip_schedule_updates(response)
         assert "adjust my reminders" in clean
         assert "<schedule_updates>" not in clean
         assert len(lines) == 2
@@ -618,7 +618,7 @@ class TestScheduleUpdatesStripping:
         assert "cancel_wakeup" in lines[1]
 
     def test_tags_in_middle(self):
-        from telegram_bot import _strip_schedule_updates
+        from telegram_bot import strip_schedule_updates
         response = (
             "Sure thing!\n\n"
             "<schedule_updates>\n"
@@ -626,7 +626,7 @@ class TestScheduleUpdatesStripping:
             "</schedule_updates>\n\n"
             "Have a great day!"
         )
-        clean, lines = _strip_schedule_updates(response)
+        clean, lines = strip_schedule_updates(response)
         assert "Sure thing!" in clean
         assert "great day" in clean
         assert "<schedule_updates>" not in clean

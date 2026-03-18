@@ -168,11 +168,15 @@ def _handle_schedule(memory: PersonaMemory, persona_name: str):
 
     Prompts the user for wake time (first planning cycle), sleep time
     (last allowed wake-up), and daily action limit. Saves to the
-    database and bootstraps the agent's first planning cycle.
+    database and adjusts the agent's planning cycles if the operating
+    hours changed.
 
-    The running Telegram service will pick up the new config on its
-    next trigger cycle — no restart needed for schedule changes.
-    Changing the schedule also clears old recurring triggers.
+    Targeted wake-ups (pre-meeting reminders, user-requested reminders,
+    etc.) are NEVER deleted by this command. Only planning cycles that
+    fall outside the new operating window are removed.
+
+    The running Telegram service picks up schedule changes without
+    restarting.
     """
     # Show current config if one exists
     current = memory.get_schedule_config()
@@ -249,25 +253,50 @@ def _handle_schedule(memory: PersonaMemory, persona_name: str):
         except ValueError:
             console.print("[error]Enter a positive number (e.g. 25, 50)[/error]")
 
-    # --- Save and apply ---
+    # --- Determine what changed ---
+    hours_changed = (
+        current is None
+        or current["start_time"] != start_time
+        or current["end_time"] != end_time
+    )
+
+    # --- Save config ---
     # interval_minutes is preserved for backward compat but not used
     # by the self-scheduling agent
     memory.set_schedule_config(start_time, end_time, 30, max_actions)
-    memory.clear_agent_triggers()
 
-    # Bootstrap the agent's first planning cycle
-    ensure_agent_has_plan(memory)
+    # --- Adjust triggers only if operating hours changed ---
+    if hours_changed:
+        # Remove only planning cycles outside the new window.
+        # Targeted wake-ups (reminders, meeting prep, etc.) are preserved.
+        removed = memory.reschedule_planning_cycles()
+        if removed:
+            console.print(
+                f"  [system]Removed {removed} planning cycle(s) outside "
+                f"new operating hours[/system]"
+            )
 
-    # Count what was created
-    active = memory.get_active_triggers()
-    trigger_count = len([t for t in active if not t.get("fired")])
+        # Ensure the agent has a planning cycle within the new window
+        ensure_agent_has_plan(memory)
 
-    console.print(
-        f"\n  [system]Schedule updated for[/system] [persona]{persona_name}[/persona]\n"
-        f"    Wake: {start_time}  Sleep: {end_time}\n"
-        f"    Max actions/day: {max_actions}\n"
-        f"    {trigger_count} trigger(s) seeded — agent will plan its own day\n"
-    )
+        # Count what exists now
+        active = memory.get_active_triggers()
+        trigger_count = len([t for t in active if not t.get("fired")])
+
+        console.print(
+            f"\n  [system]Schedule updated for[/system] [persona]{persona_name}[/persona]\n"
+            f"    Wake: {start_time}  Sleep: {end_time}\n"
+            f"    Max actions/day: {max_actions}\n"
+            f"    {trigger_count} trigger(s) active — targeted wake-ups preserved\n"
+        )
+    else:
+        # Only the action limit changed — no trigger modifications needed
+        console.print(
+            f"\n  [system]Schedule updated for[/system] [persona]{persona_name}[/persona]\n"
+            f"    Wake: {start_time}  Sleep: {end_time}\n"
+            f"    Max actions/day: {max_actions}\n"
+            f"    Existing triggers unchanged\n"
+        )
 
 
 def _print_banner(provider: str, persona_name: str, memory: PersonaMemory, debug: bool = False):
@@ -460,12 +489,41 @@ def chat_loop(provider: str, persona_name: str, debug: bool = False):
                 console.print(f"\n[error]✗ Error ({provider}): {e}[/error]\n")
                 continue
 
-        # Persist assistant response
-        memory.add_message("assistant", response)
+        # Strip schedule updates before displaying or persisting.
+        # The LLM may include <schedule_updates> tags when it detects
+        # the user's message affects its plan.
+        from agent import strip_schedule_updates, apply_schedule_updates
+        clean_response, schedule_lines = strip_schedule_updates(response)
+
+        # Persist the clean response (without schedule tags)
+        memory.add_message("assistant", clean_response)
 
         console.print()
-        _print_response(response, provider, persona_name)
+        _print_response(clean_response, provider, persona_name)
         console.print()
+
+        # Apply schedule updates silently
+        if schedule_lines:
+            results = apply_schedule_updates(schedule_lines, memory)
+            applied = [r for r in results if r["status"] == "applied"]
+            rejected = [r for r in results if r["status"] == "rejected"]
+            failed = [r for r in results if r["status"] == "failed"]
+            if applied:
+                console.print(
+                    f"[status]— {len(applied)} schedule update(s) applied —[/status]"
+                )
+            if rejected:
+                for r in rejected:
+                    console.print(
+                        f"[status]— schedule update rejected: {r['reason']} —[/status]"
+                    )
+            if failed:
+                for r in failed:
+                    console.print(
+                        f"[status]— schedule update failed: {r.get('reason', 'unknown')} —[/status]"
+                    )
+            if applied or rejected or failed:
+                console.print()
 
         # Check if older messages need summarization
         try:
@@ -502,8 +560,15 @@ def single_message(message: str, provider: str, persona_name: str):
             provider=provider,
         )
 
-    memory.add_message("assistant", response)
-    _print_response(response, provider, persona_name)
+    from agent import strip_schedule_updates, apply_schedule_updates
+    clean_response, schedule_lines = strip_schedule_updates(response)
+
+    memory.add_message("assistant", clean_response)
+    _print_response(clean_response, provider, persona_name)
+
+    # Apply schedule updates silently
+    if schedule_lines:
+        apply_schedule_updates(schedule_lines, memory)
 
     # Check if summarization is needed
     try:
