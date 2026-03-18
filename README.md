@@ -9,7 +9,7 @@ its own persistent memory, and its own conversation history. Conversations
 survive restarts, reboots, and crashes. Older conversations are automatically
 summarized and retrieved by semantic similarity when they become relevant again.
 
-The primary persona (Purcival) is a **self-scheduling autonomous agent** that
+The primary persona (Jo) is a **self-scheduling autonomous agent** that
 plans its own day, manages its own wake-up schedule, and sends proactive
 messages via Telegram. The agent reasons about what to do using Claude,
 schedules targeted wake-ups with specific purposes, and adjusts its plan
@@ -20,40 +20,39 @@ when the user's situation changes.
 ```
 Your phone (Telegram)                         Your Linux box
     │                                              │
-    ├─ message Purcival bot ──→ Telegram servers ──→ ├─ run_telegram.py --persona purcival
-    ├─ message Ada bot ───────→ Telegram servers ──→ ├─ run_telegram.py --persona ada
+    ├─ message Jo bot  ──→  Telegram servers  ──→  ├─ run_telegram.py --persona jo
     │                                              │
     │            Each process:                     │
-    │            ┌──────────────────────────┐       │
-    │            │ Long poll Telegram       │       │
-    │            │ Persist user message     │──→ data/<persona>/memory.db
-    │            │ Assemble context:        │       │
-    │            │   ├─ Persona prompt      │←── personas/<persona>.md
-    │            │   ├─ User context        │←── data/user_context.md
-    │            │   ├─ Session info        │    (current time, device type)
-    │            │   ├─ Scheduled plan      │←── memory.db (agent wake-ups)
-    │            │   ├─ Relevant summaries  │←── memory.db (semantic search)
-    │            │   └─ Recent messages     │←── memory.db (verbatim history)
-    │            │ Call brain.ask()       ──┼──→ Ollama (local GPU)
-    │            │       or              ──┼──→ Claude API (cloud)
-    │            │ Strip <schedule_updates> │       │
-    │            │ Persist response         │──→ memory.db
-    │            │ Apply schedule updates   │       │
-    │            │ Check if summarization   │       │
-    │            │   needed → if so:        │       │
+    │            ┌───────────────────────────┐     │
+    │            │ Long poll Telegram        │     │
+    │            │ Persist user message      │──→ data/<persona>/memory.db
+    │            │ Assemble context:         │     │
+    │            │   ├─ Persona prompt       │←── personas/<persona>.md
+    │            │   ├─ User context         │←── data/user_context.md
+    │            │   ├─ Session info         │    (current time, device type)
+    │            │   ├─ Scheduled plan       │←── memory.db (agent wake-ups)
+    │            │   ├─ Relevant summaries   │←── memory.db (semantic search)
+    │            │   └─ Recent messages      │←── memory.db (verbatim history)
+    │            │ Call brain.ask()        ──┼──→ Ollama (local GPU)
+    │            │       or                ──┼──→ Claude API (cloud)
+    │            │ Strip <schedule_updates>  │     │
+    │            │ Persist response          │──→ memory.db
+    │            │ Apply schedule updates    │     │
+    │            │ Check if summarization    │     │
+    │            │   needed → if so:         │     │
     │            │   Summarize old messages  │──→ Claude API (always)
     │            │   Embed summary           │──→ nomic-embed-text
     │            │   Store summary + vector  │──→ memory.db
-    │            │                          │       │
-    │            │ Agent scheduler:          │       │
-    │            │   Check triggers every 60s│       │
-    │            │   If due → run agent cycle│       │
-    │            │     ├─ Perceive (tools)   │       │
+    │            │                           │     │
+    │            │ Agent scheduler:          │     │
+    │            │   Check triggers every 60s│     │
+    │            │   If due → run agent cycle│     │
+    │            │     ├─ Perceive (tools)   │     │
     │            │     ├─ Reason (Claude) ───┼──→ Claude API
-    │            │     ├─ Validate + act     │       │
-    │            │     ├─ Update schedule    │       │
+    │            │     ├─ Validate + act     │     │
+    │            │     ├─ Update schedule    │     │
     │            │     └─ Update narrative   │──→ memory.db
-    │            └──────────────────────────┘       │
+    │            └──────────────────────────┘      
 ```
 
 Each persona runs as its own process with its own Telegram bot and its own
@@ -85,7 +84,7 @@ cp .env.example .env
 
 ```bash
 python main.py                          # pick persona interactively
-python main.py --persona purcival       # jump straight in
+python main.py --persona jo             # jump straight in
 python main.py --provider claude        # use Claude instead of Ollama
 python main.py --debug                  # dump full prompts to debug/
 python main.py -m "hello" --persona ada # single message
@@ -103,11 +102,11 @@ before deleting data.
 
 ```bash
 # Test manually first
-python run_telegram.py --persona purcival
+python run_telegram.py --persona jo
 
 # Run as a background service (starts on boot, auto-restarts)
-sudo systemctl start purcival@purcival
-sudo systemctl enable purcival@purcival
+sudo systemctl start purcival@jo
+sudo systemctl enable purcival@jo
 
 # Run multiple personas simultaneously
 sudo systemctl start purcival@ada
@@ -130,7 +129,7 @@ to prevent accidental data loss — use the terminal interface to clear history.
    TELEGRAM_TOKEN_PURCIVAL=7123456:AAF...
    TELEGRAM_TOKEN_ADA=7234567:BBG...
    ```
-4. Test: `python run_telegram.py --persona purcival`
+4. Test: `python run_telegram.py --persona jo`
 
 ### Setting up systemd
 
@@ -142,8 +141,8 @@ to prevent accidental data loss — use the terminal interface to clear history.
 
 Useful commands:
 ```bash
-journalctl -u purcival@purcival -f     # live logs
-sudo systemctl restart purcival@purcival  # restart after code changes
+journalctl -u purcival@jo -f     # live logs
+sudo systemctl restart purcival@jo  # restart after code changes
 sudo systemctl status 'purcival@*'     # status of all personas
 ```
 
@@ -159,19 +158,16 @@ bot, its own process, and its own memory database.
 
 ```
 personas/
-├── purcival.md    — English butler, detail-oriented life manager (agent-enabled)
-├── ada.md         — spunky technical sparring partner
-├── jo.md          — efficient executive assistant
-└── default.md     — general-purpose assistant
+├── jo.md          — English butler, detail-oriented life manager (agent-enabled)
+└── ada.md         — Spunky technical sparring partner
 ```
 
-**Purcival** is a detail-oriented personal assistant modeled after a capable
-English butler. Witty, warm, and to the point. He remembers the details of
-your life — deadlines, commitments, people's names — and keeps you on track
-with your goals. He gives gentle reminders when things are slipping and is
-honest when you need to hear it. He is the primary persona with autonomous
-agent capabilities — he plans his own day, schedules his own wake-ups, and
-sends proactive messages via Telegram.
+**Jo** is a detail-oriented personal assistant. They are witty, warm, and to
+the point. They remember the details of your life — deadlines, commitments,
+people's names — and keeps you on track with your goals. They give gentle
+reminders when things are slipping and is honest when you need to hear it.
+They is the primary persona with autonomous agent capabilities — Jo plans the
+day, schedules wake-ups, and sends proactive messages via Telegram.
 
 **Ada** is a technical expert and thinking partner. Sharp, curious, and a
 little irreverent. She is who you talk to about coding, systems design,
@@ -179,21 +175,19 @@ math, science, and engineering. She explains things clearly without dumbing
 them down, pushes back on weak ideas, and gets excited when a conversation
 goes somewhere interesting. She does not care about schedules or to-do lists.
 
-**Jo** is an efficient executive assistant. Action-oriented and good for
-task management and quick delegation.
 
 To add a new persona: create a `.md` file in `personas/`, create a Telegram
 bot with @BotFather, add the token to `.env`, and start the service. The
 persona gets a fresh, independent memory database automatically.
 
-## Self-scheduling agent (Stage 5)
+## Self-scheduling agent
 
 Purcival is an autonomous agent that plans its own day. Instead of firing on
 a fixed interval, the agent schedules purposeful wake-ups with specific
 contexts:
 
 - "Wake me at 9:52 to encourage Zach before his 10:00 meeting"
-- "Wake me at 21:00 to remind Zach about Tessa's Tylenol"
+- "Wake me at 22:30 to remind Zach to start winding down
 - "Wake me tomorrow at 9:00 for morning planning"
 
 ### How it works
@@ -290,7 +284,7 @@ of every message exchanged, timestamped in local time. Recent messages are
 included directly in the API call's messages array. Older messages stay in
 the database and are accessible only through their summaries.
 
-### Agent state (Stage 5)
+### Agent state
 
 In addition to conversation memory, the agent-enabled persona stores:
 
@@ -349,10 +343,8 @@ purcival/
 ├── data/                Per-persona databases + shared user context (gitignored)
 ├── debug/               Prompt dumps from debug mode (gitignored)
 ├── tests/               Test suite
-│   └── test_stage5.py   60 tests for agent cycle, tools, parsing, validation
 ├── purcival@.service    Systemd template for background services
 ├── requirements.txt     Python dependencies
-├── STAGE5_AGENT_DESIGN.md  Design document for the self-scheduling agent
 ├── .env.example         Configuration template
 └── .gitignore           Keeps secrets, data, debug dumps, and artifacts out of git
 ```
@@ -383,7 +375,7 @@ OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=mistral-small3.2
 DEFAULT_PERSONA=default
 TELEGRAM_ALLOWED_USER_ID=
-TELEGRAM_TOKEN_PURCIVAL=
+TELEGRAM_CHAT_ID=
 TELEGRAM_TOKEN_ADA=
 TELEGRAM_TOKEN_JO=
 ```
