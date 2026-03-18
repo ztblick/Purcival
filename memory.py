@@ -7,13 +7,25 @@ This module handles:
     - Storing conversation summaries with vector embeddings
     - Retrieving recent messages for the context window
     - Retrieving relevant summaries via cosine similarity search
+    - Storing proactive schedule configuration
+    - Managing proactive triggers
+    - Tool state persistence (Stage 5)
+    - Agent action logging (Stage 5)
+    - Agent narrative state (Stage 5)
+    - Reasoning log (Stage 5)
 
 The rest of the app interacts with memory through a PersonaMemory instance.
 One instance per persona, created at startup.
 
 Database schema:
-    messages   — full verbatim record of every message, never deleted
-    summaries  — compressed conversation chunks with embeddings
+    messages        — full verbatim record of every message, never deleted
+    summaries       — compressed conversation chunks with embeddings
+    triggers        — scheduled wake-ups for proactive messaging / agent cycles
+    schedule_config — schedule settings (single row per persona)
+    tool_state      — key-value store for per-tool persistent state
+    agent_actions   — audit trail of every action the agent takes or proposes
+    agent_narrative — rolling prose state written by the LLM (single row)
+    reasoning_log   — full reasoning traces for debugging
 
 Design notes:
     - WAL mode is enabled for concurrent reads (multiple personas can
@@ -25,10 +37,11 @@ Design notes:
       this is fast enough and avoids adding a vector DB dependency.
 """
 
+import json
 import sqlite3
 import numpy as np
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # All persona data lives under this directory
 DATA_DIR = Path(__file__).parent / "data"
@@ -124,6 +137,59 @@ class PersonaMemory:
                     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS schedule_config (
+                    id                  INTEGER PRIMARY KEY CHECK (id = 1),
+                    start_time          TEXT NOT NULL,
+                    end_time            TEXT NOT NULL,
+                    interval_minutes    INTEGER NOT NULL,
+                    max_actions_per_day INTEGER NOT NULL DEFAULT 25,
+                    updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS tool_state (
+                    tool_name   TEXT NOT NULL,
+                    key         TEXT NOT NULL,
+                    value       TEXT NOT NULL,
+                    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (tool_name, key)
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_actions (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cycle_id    TEXT NOT NULL,
+                    tool_name   TEXT NOT NULL,
+                    method_name TEXT NOT NULL,
+                    tier        TEXT NOT NULL,
+                    parameters  TEXT,
+                    result      TEXT,
+                    status      TEXT NOT NULL DEFAULT 'completed',
+                    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_narrative (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    narrative   TEXT NOT NULL,
+                    cycle_id    TEXT NOT NULL,
+                    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS reasoning_log (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cycle_id         TEXT NOT NULL,
+                    trigger_id       INTEGER,
+                    trigger_purpose  TEXT,
+                    tool_contexts    TEXT,
+                    narrative_in     TEXT,
+                    llm_response     TEXT,
+                    actions_taken    TEXT,
+                    schedule_changes TEXT,
+                    narrative_out    TEXT,
+                    skipped          BOOLEAN DEFAULT FALSE,
+                    skip_reason      TEXT,
+                    provider         TEXT,
+                    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_messages_created
                     ON messages(created_at);
 
@@ -132,8 +198,75 @@ class PersonaMemory:
 
                 CREATE INDEX IF NOT EXISTS idx_triggers_fire_at
                     ON triggers(fire_at);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_actions_cycle
+                    ON agent_actions(cycle_id);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_actions_status
+                    ON agent_actions(status);
+
+                CREATE INDEX IF NOT EXISTS idx_reasoning_log_created
+                    ON reasoning_log(created_at);
             """)
             conn.commit()
+        finally:
+            conn.close()
+
+        # Migrate existing databases that lack the max_actions_per_day column.
+        # ALTER TABLE ... ADD COLUMN is safe if the column doesn't exist yet,
+        # but SQLite throws an error if it does. We catch and ignore that.
+        self._migrate_schedule_config()
+        self._migrate_agent_narrative()
+
+    def _migrate_schedule_config(self):
+        """Add max_actions_per_day to schedule_config if it's missing."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "ALTER TABLE schedule_config "
+                "ADD COLUMN max_actions_per_day INTEGER NOT NULL DEFAULT 25"
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists — nothing to do
+        finally:
+            conn.close()
+
+    def _migrate_agent_narrative(self):
+        """
+        Migrate agent_narrative from single-row (CHECK id=1) to append-only.
+
+        The old schema enforced a single row. The new schema uses
+        AUTOINCREMENT and keeps all entries. We detect the old schema
+        by trying an insert with id != 1 — if it fails with a CHECK
+        constraint, we need to migrate.
+        """
+        conn = self._connect()
+        try:
+            # Check if the old CHECK constraint exists by looking at the
+            # table's SQL definition
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='table' AND name='agent_narrative'"
+            ).fetchone()
+            if row and "CHECK" in (row["sql"] or ""):
+                # Old schema — recreate without the constraint
+                conn.executescript("""
+                    ALTER TABLE agent_narrative RENAME TO agent_narrative_old;
+                    CREATE TABLE agent_narrative (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        narrative   TEXT NOT NULL,
+                        cycle_id    TEXT NOT NULL,
+                        updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    INSERT INTO agent_narrative (narrative, cycle_id, updated_at)
+                        SELECT narrative, cycle_id, updated_at
+                        FROM agent_narrative_old;
+                    DROP TABLE agent_narrative_old;
+                """)
+                conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Table doesn't exist yet or already migrated
         finally:
             conn.close()
 
@@ -380,6 +513,111 @@ class PersonaMemory:
         finally:
             conn.close()
 
+    # --- Schedule Configuration ---
+
+    def get_schedule_config(self) -> dict | None:
+        """
+        Get the proactive messaging schedule, or None if not configured.
+
+        The schedule_config table holds at most one row (enforced by
+        CHECK constraint on id=1). This is the single source of truth
+        for when this persona should proactively reach out.
+
+        Returns:
+            Dict with 'start_time', 'end_time', 'interval_minutes',
+            'max_actions_per_day', 'updated_at', or None if not set.
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT start_time, end_time, interval_minutes, "
+                "max_actions_per_day, updated_at "
+                "FROM schedule_config WHERE id = 1"
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def set_schedule_config(
+        self,
+        start_time: str,
+        end_time: str,
+        interval_minutes: int,
+        max_actions_per_day: int = 25,
+    ):
+        """
+        Set or update the proactive messaging schedule.
+
+        Uses INSERT OR REPLACE to upsert the single config row.
+
+        Args:
+            start_time: First check-in time as "HH:MM" (24-hour).
+            end_time: Last check-in time as "HH:MM" (24-hour).
+            interval_minutes: Minutes between check-ins (preserved for
+                backward compat; the self-scheduling agent manages its own).
+            max_actions_per_day: Cap on message/draft/execute actions per day.
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO schedule_config
+                    (id, start_time, end_time, interval_minutes,
+                     max_actions_per_day, updated_at)
+                VALUES (1, ?, ?, ?, ?, ?)
+                """,
+                (start_time, end_time, interval_minutes,
+                 max_actions_per_day, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def clear_recurring_triggers(self):
+        """
+        Delete all unfired recurring triggers.
+
+        Called when the schedule changes so the trigger pool can be
+        re-seeded with the new config. One-shot triggers (reminders,
+        calendar events) are preserved — only recurring check-ins
+        are cleared.
+        """
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                DELETE FROM triggers
+                WHERE fired = FALSE
+                  AND recurring IS NOT NULL
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def clear_agent_triggers(self):
+        """
+        Delete all unfired agent_cycle triggers.
+
+        Called when the schedule changes via /schedule so the agent's
+        plan can be rebuilt from scratch with the new config. This
+        clears both the old recurring check-ins AND the agent's
+        self-scheduled wake-ups.
+        """
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                DELETE FROM triggers
+                WHERE fired = FALSE
+                  AND (recurring IS NOT NULL OR type = 'agent_cycle')
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     # --- Trigger Operations ---
 
     def add_trigger(
@@ -393,12 +631,12 @@ class PersonaMemory:
         Schedule a trigger to fire at a specific time.
 
         Args:
-            trigger_type: "reminder", "calendar", or "check_in"
+            trigger_type: "reminder", "calendar", "check_in", or "agent_cycle"
             fire_at: When to fire, as "YYYY-MM-DD HH:MM:SS" local time.
-            context: Human-readable description of why this trigger exists
-                (e.g. "pick up Tessa from work", "morning check-in").
+            context: For agent_cycle triggers, a JSON string with purpose,
+                tools, and planning_cycle fields. For legacy triggers,
+                a human-readable description.
             recurring: Recurrence pattern string, or None for one-shot.
-                e.g. "hourly_6_to_23" for the standard check-in schedule.
 
         Returns:
             The database ID of the stored trigger.
@@ -443,7 +681,7 @@ class PersonaMemory:
 
     def mark_trigger_fired(self, trigger_id: int):
         """
-        Mark a one-shot trigger as fired so it won't fire again.
+        Mark a trigger as fired so it won't fire again.
         """
         conn = self._connect()
         try:
@@ -495,11 +733,321 @@ class PersonaMemory:
         finally:
             conn.close()
 
+    def get_trigger(self, trigger_id: int) -> dict | None:
+        """Get a single trigger by ID, or None if not found."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT id, type, fire_at, context, recurring, fired, created_at
+                FROM triggers
+                WHERE id = ?
+                """,
+                (trigger_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def update_trigger(self, trigger_id: int, fire_at: str, context: str):
+        """
+        Update a trigger's fire time and context.
+
+        Used by the agent to modify its own scheduled wake-ups.
+        Only works on unfired triggers.
+
+        Args:
+            trigger_id: The trigger to update.
+            fire_at: New fire time as "YYYY-MM-DD HH:MM:SS".
+            context: New context (JSON string for agent_cycle triggers).
+        """
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE triggers
+                SET fire_at = ?, context = ?
+                WHERE id = ? AND fired = FALSE
+                """,
+                (fire_at, context, trigger_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def delete_trigger(self, trigger_id: int):
         """Remove a trigger entirely."""
         conn = self._connect()
         try:
             conn.execute("DELETE FROM triggers WHERE id = ?", (trigger_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    # --- Tool State ---
+
+    def get_tool_state(self, tool_name: str, key: str) -> str | None:
+        """
+        Read a tool's persisted state value.
+
+        Returns the value as a string, or None if the key doesn't exist.
+        Tools that store complex data serialize it as JSON.
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT value FROM tool_state WHERE tool_name = ? AND key = ?",
+                (tool_name, key),
+            ).fetchone()
+            return row["value"] if row else None
+        finally:
+            conn.close()
+
+    def set_tool_state(self, tool_name: str, key: str, value: str):
+        """
+        Write a tool's persisted state value.
+
+        Uses INSERT OR REPLACE so it works for both new and existing keys.
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO tool_state (tool_name, key, value, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (tool_name, key, value, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    # --- Agent Actions ---
+
+    def add_agent_action(
+        self,
+        cycle_id: str,
+        tool_name: str,
+        method_name: str,
+        tier: str,
+        parameters: str | None = None,
+        result: str | None = None,
+        status: str = "completed",
+    ) -> int:
+        """
+        Log an action taken (or proposed) by the agent.
+
+        Every action goes through here: successful executions, failures,
+        pending proposals, approvals, rejections, and expirations.
+
+        Args:
+            cycle_id: Which agent cycle produced this action.
+            tool_name: The tool used (e.g. "telegram", "gmail").
+            method_name: The method called (e.g. "send_message").
+            tier: "observe", "message", "draft", or "execute".
+            parameters: JSON string of the method arguments.
+            result: The tool's return value, or error message.
+            status: One of 'completed', 'failed', 'pending_approval',
+                    'approved', 'rejected', 'expired'.
+
+        Returns:
+            The database ID of the logged action.
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO agent_actions
+                    (cycle_id, tool_name, method_name, tier,
+                     parameters, result, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (cycle_id, tool_name, method_name, tier,
+                 parameters, result, status, now),
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def get_today_action_count(self) -> int:
+        """
+        Count how many message/draft/execute actions were completed today.
+
+        Used to enforce the daily action budget. Observe-tier actions
+        and schedule management don't count against the limit.
+        """
+        today = datetime.now().strftime("%Y-%m-%d")
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) as count FROM agent_actions
+                WHERE created_at >= ? || ' 00:00:00'
+                  AND created_at < ? || ' 23:59:59'
+                  AND status = 'completed'
+                  AND tier IN ('message', 'draft', 'execute')
+                """,
+                (today, today),
+            ).fetchone()
+            return row["count"]
+        finally:
+            conn.close()
+
+    def get_pending_proposals(self) -> list[dict]:
+        """
+        Get all execute-tier actions awaiting user approval.
+
+        Returns actions with status 'pending_approval', ordered by
+        creation time (oldest first).
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, cycle_id, tool_name, method_name, tier,
+                       parameters, status, created_at
+                FROM agent_actions
+                WHERE status = 'pending_approval'
+                ORDER BY created_at ASC
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def update_proposal_status(self, action_id: int, status: str):
+        """
+        Update the status of a pending proposal.
+
+        Args:
+            action_id: The agent_actions row ID.
+            status: New status ('approved', 'rejected', 'expired').
+        """
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE agent_actions SET status = ? WHERE id = ?",
+                (status, action_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    # --- Agent Narrative State ---
+
+    def get_narrative(self) -> str | None:
+        """
+        Read the agent's most recent narrative state.
+
+        Returns the prose state written by the LLM at the end of the
+        last agent cycle, or None if no narrative exists yet (fresh start).
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT narrative FROM agent_narrative ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            return row["narrative"] if row else None
+        finally:
+            conn.close()
+
+    def set_narrative(self, narrative: str, cycle_id: str):
+        """
+        Append a new narrative state entry.
+
+        Called at the end of each agent cycle with the LLM's updated
+        understanding of the current situation. Previous narratives
+        are preserved as a history log.
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO agent_narrative (narrative, cycle_id, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (narrative, cycle_id, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    # --- Reasoning Log ---
+
+    def add_reasoning_log(
+        self,
+        cycle_id: str,
+        trigger_id: int | None = None,
+        trigger_purpose: str | None = None,
+        tool_contexts: str | None = None,
+        narrative_in: str | None = None,
+        llm_response: str | None = None,
+        actions_taken: str | None = None,
+        schedule_changes: str | None = None,
+        narrative_out: str | None = None,
+        skipped: bool = False,
+        skip_reason: str | None = None,
+        provider: str | None = None,
+    ) -> int:
+        """
+        Log a full reasoning trace for one agent cycle.
+
+        Called at the end of every cycle, whether reasoning happened
+        or was skipped. This is the primary debugging tool for
+        understanding agent behavior.
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO reasoning_log
+                    (cycle_id, trigger_id, trigger_purpose, tool_contexts,
+                     narrative_in, llm_response, actions_taken,
+                     schedule_changes, narrative_out, skipped,
+                     skip_reason, provider, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (cycle_id, trigger_id, trigger_purpose, tool_contexts,
+                 narrative_in, llm_response, actions_taken,
+                 schedule_changes, narrative_out, skipped,
+                 skip_reason, provider, now),
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def cleanup_old_data(self):
+        """
+        Enforce retention policies. Called at the start of each agent cycle.
+
+        - reasoning_log: delete entries older than 7 days
+        - agent_actions: delete entries older than 30 days
+        - agent_narrative: delete entries older than 30 days
+        """
+        now = datetime.now()
+        reasoning_cutoff = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        actions_cutoff = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+
+        conn = self._connect()
+        try:
+            conn.execute(
+                "DELETE FROM reasoning_log WHERE created_at < ?",
+                (reasoning_cutoff,),
+            )
+            conn.execute(
+                "DELETE FROM agent_actions WHERE created_at < ?",
+                (actions_cutoff,),
+            )
+            conn.execute(
+                "DELETE FROM agent_narrative WHERE updated_at < ?",
+                (actions_cutoff,),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -519,10 +1067,12 @@ class PersonaMemory:
 
     def clear_history(self):
         """
-        Delete all messages and summaries. Used by /clear command.
+        Delete all messages, summaries, and triggers. Used by /clear.
 
         This is destructive — there's no undo. The database file
-        itself is preserved (with empty tables).
+        itself is preserved (with empty tables). Schedule config and
+        agent narrative are intentionally preserved — they're settings
+        and state, not conversation data.
         """
         conn = self._connect()
         try:

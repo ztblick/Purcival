@@ -9,6 +9,12 @@ its own persistent memory, and its own conversation history. Conversations
 survive restarts, reboots, and crashes. Older conversations are automatically
 summarized and retrieved by semantic similarity when they become relevant again.
 
+The primary persona (Purcival) is a **self-scheduling autonomous agent** that
+plans its own day, manages its own wake-up schedule, and sends proactive
+messages via Telegram. The agent reasons about what to do using Claude,
+schedules targeted wake-ups with specific purposes, and adjusts its plan
+when the user's situation changes.
+
 ## How it works
 
 ```
@@ -25,22 +31,28 @@ Your phone (Telegram)                         Your Linux box
     │            │   ├─ Persona prompt      │←── personas/<persona>.md
     │            │   ├─ User context        │←── data/user_context.md
     │            │   ├─ Session info        │    (current time, device type)
+    │            │   ├─ Scheduled plan      │←── memory.db (agent wake-ups)
     │            │   ├─ Relevant summaries  │←── memory.db (semantic search)
     │            │   └─ Recent messages     │←── memory.db (verbatim history)
     │            │ Call brain.ask()       ──┼──→ Ollama (local GPU)
     │            │       or              ──┼──→ Claude API (cloud)
+    │            │ Strip <schedule_updates> │       │
     │            │ Persist response         │──→ memory.db
-    │            │ Send response to user    │       │
+    │            │ Apply schedule updates   │       │
     │            │ Check if summarization   │       │
     │            │   needed → if so:        │       │
     │            │   Summarize old messages  │──→ Claude API (always)
     │            │   Embed summary           │──→ nomic-embed-text
     │            │   Store summary + vector  │──→ memory.db
     │            │                          │       │
-    │            │ Proactive scheduler:      │       │
+    │            │ Agent scheduler:          │       │
     │            │   Check triggers every 60s│       │
-    │            │   If due → compose msg ──┼──→ Ollama or Claude
-    │            │   Send to user            │       │
+    │            │   If due → run agent cycle│       │
+    │            │     ├─ Perceive (tools)   │       │
+    │            │     ├─ Reason (Claude) ───┼──→ Claude API
+    │            │     ├─ Validate + act     │       │
+    │            │     ├─ Update schedule    │       │
+    │            │     └─ Update narrative   │──→ memory.db
     │            └──────────────────────────┘       │
 ```
 
@@ -79,7 +91,8 @@ python main.py --debug                  # dump full prompts to debug/
 python main.py -m "hello" --persona ada # single message
 ```
 
-Terminal commands: `/persona`, `/claude`, `/ollama`, `/status`, `/debug`, `clear`, `quit`
+Terminal commands: `/persona`, `/claude`, `/ollama`, `/schedule`, `/status`,
+`/debug`, `clear`, `quit`
 
 The terminal interface shows a spinner when summarization is running
 ("Committing conversation to memory...") and allows longer, more detailed
@@ -146,7 +159,7 @@ bot, its own process, and its own memory database.
 
 ```
 personas/
-├── purcival.md    — English butler, detail-oriented life manager
+├── purcival.md    — English butler, detail-oriented life manager (agent-enabled)
 ├── ada.md         — spunky technical sparring partner
 ├── jo.md          — efficient executive assistant
 └── default.md     — general-purpose assistant
@@ -156,7 +169,9 @@ personas/
 English butler. Witty, warm, and to the point. He remembers the details of
 your life — deadlines, commitments, people's names — and keeps you on track
 with your goals. He gives gentle reminders when things are slipping and is
-honest when you need to hear it.
+honest when you need to hear it. He is the primary persona with autonomous
+agent capabilities — he plans his own day, schedules his own wake-ups, and
+sends proactive messages via Telegram.
 
 **Ada** is a technical expert and thinking partner. Sharp, curious, and a
 little irreverent. She is who you talk to about coding, systems design,
@@ -164,9 +179,71 @@ math, science, and engineering. She explains things clearly without dumbing
 them down, pushes back on weak ideas, and gets excited when a conversation
 goes somewhere interesting. She does not care about schedules or to-do lists.
 
+**Jo** is an efficient executive assistant. Action-oriented and good for
+task management and quick delegation.
+
 To add a new persona: create a `.md` file in `personas/`, create a Telegram
 bot with @BotFather, add the token to `.env`, and start the service. The
 persona gets a fresh, independent memory database automatically.
+
+## Self-scheduling agent (Stage 5)
+
+Purcival is an autonomous agent that plans its own day. Instead of firing on
+a fixed interval, the agent schedules purposeful wake-ups with specific
+contexts:
+
+- "Wake me at 9:52 to encourage Zach before his 10:00 meeting"
+- "Wake me at 21:00 to remind Zach about Tessa's Tylenol"
+- "Wake me tomorrow at 9:00 for morning planning"
+
+### How it works
+
+1. **Bootstrap:** At the configured wake time, the system seeds a planning
+   cycle. The agent wakes up, looks at what it knows, and plans its day.
+2. **Planning cycles:** The agent schedules periodic check-ins for itself
+   to scan for new information. Empty tools list = load all tools.
+3. **Targeted wake-ups:** The agent schedules specific wake-ups with a
+   purpose and the tools it needs. Each cycle reasons about its purpose.
+4. **User messages update plans:** When you tell the agent something
+   time-sensitive ("Tessa should take Tylenol at 9pm"), it silently
+   schedules a reminder. No separate planning cycle needed.
+
+### Configuring the agent
+
+Use `/schedule` in the terminal to set:
+- **Wake time:** When the agent's first planning cycle fires (e.g., 06:00)
+- **Sleep time:** No agent-initiated wake-ups after this (e.g., 23:00)
+- **Daily action limit:** Max messages/drafts/executions per day (default: 25)
+
+```bash
+python main.py --persona purcival
+# Then type /schedule and follow the prompts
+```
+
+The running Telegram service picks up schedule changes without restarting.
+
+### Guardrails
+
+All enforced by code, not just the LLM prompt:
+- Wake-ups outside operating hours are rejected
+- Daily action budget caps how much the agent does
+- Execute-tier actions (sending email, creating events) require explicit approval
+- Every action goes through a 7-check validation gate before execution
+
+### Tools
+
+The agent interacts with the world through tools:
+
+| Tool | What it does | Status |
+|------|-------------|--------|
+| **ScheduleTool** | Agent manages its own wake-up schedule | Built |
+| **TelegramTool** | Send messages to the user | Built |
+| **GoogleCalendarTool** | Read/create calendar events | Planned |
+| **GmailTool** | Read/send email | Planned |
+
+Adding a new tool: create a class implementing the `Tool` interface in
+`tools/`, register it in `tools/__init__.py`. No changes to the agent
+loop needed.
 
 ## Memory system
 
@@ -181,9 +258,9 @@ search to give each persona long-term memory.
 data/
 ├── user_context.md          ← shared context about you (manually maintained)
 ├── purcival/
-│   └── memory.db            ← Purcival's messages, summaries, embeddings, triggers
+│   └── memory.db            ← messages, summaries, triggers, agent state
 ├── ada/
-│   └── memory.db            ← Ada's messages, summaries, embeddings, triggers
+│   └── memory.db
 └── jo/
     └── memory.db
 ```
@@ -213,62 +290,20 @@ of every message exchanged, timestamped in local time. Recent messages are
 included directly in the API call's messages array. Older messages stay in
 the database and are accessible only through their summaries.
 
-### Context assembly
+### Agent state (Stage 5)
 
-Every API call assembles a prompt from these components, each with a token budget:
+In addition to conversation memory, the agent-enabled persona stores:
 
-```
-System prompt:
-  1. Persona prompt          (< 2,000 tokens)  — from personas/*.md
-  2. User context            (< 2,000 tokens)  — from data/user_context.md
-  3. Session info            (< 500 tokens)    — current time, device type
-  4. Relevant summaries      (< 8,000 tokens)  — semantic search results
-  5. Additional context      (< 8,000 tokens)  — reserved for future integrations
-
-Messages array:
-  6. Recent verbatim messages (< 8,000 tokens)  — with timestamps on user messages
-```
-
-Typical total: ~20,000 tokens. Upper bound: ~32,000 tokens. The verbatim
-message window is deliberately moderate — this is the largest cost driver
-since it's sent on every API call. Older messages are covered by summaries.
-
-### Summarization
-
-Summarization triggers after a response when unsummarized messages exceed
-6,000 tokens. Multiple batches (up to 5) can be processed in a single pass
-to catch up on backlogs. Each batch (~3,000 tokens, roughly 15-25 exchanges)
-becomes one summary. Summarization always uses Claude for quality — local
-models did not meet the accuracy bar. The summarization prompt instructs
-the model to write natural paragraphs, include timestamps, and never invent
-details that weren't discussed.
-
-### Retrieval
-
-When a message arrives, the system embeds it and searches for stored
-summaries with high cosine similarity. Summaries below a minimum
-similarity threshold (0.35) are excluded. The 2 most recent summaries
-are always included regardless of similarity to maintain conversational
-continuity. Up to 8 summaries can be retrieved per message.
-
-## Proactive messaging
-
-Each persona can initiate conversations via Telegram on a schedule.
-Hourly check-in triggers fire from 6am to 11pm. When a trigger fires,
-the decision gate checks whether to actually send a message:
-
-- **Reminders** → always send
-- **Calendar events** → always send
-- **Check-ins** → skip if conversation was active in the last 15 minutes
-
-If the gate approves, the message composer assembles context (including
-the current time, time since last message, and trigger-specific instructions)
-and asks the LLM to compose a natural proactive message. The message is
-persisted to the database so the conversation continues naturally if the
-user replies.
-
-Triggers are stored in the persona's SQLite database and survive restarts.
-New hourly triggers are seeded automatically on bot startup.
+- **Narrative state** (`agent_narrative` table) — prose written by the LLM
+  at the end of each cycle summarizing its current understanding. Read at
+  the start of the next cycle for continuity. Append-only log with 30-day
+  retention.
+- **Structured state** (`tool_state` table) — key-value store for each
+  tool's internal state (sync timestamps, seen IDs, event action history).
+- **Action log** (`agent_actions` table) — audit trail of every action
+  taken or proposed, with 30-day retention.
+- **Reasoning log** (`reasoning_log` table) — full reasoning traces for
+  debugging, with 7-day retention.
 
 ## Debug mode
 
@@ -292,24 +327,32 @@ token breakdown.
 
 ```
 purcival/
-├── main.py              Terminal UI — persona picker, chat loop, debug mode
+├── main.py              Terminal UI — persona picker, chat loop, /schedule
 ├── run_telegram.py      Telegram entry point — one persona per process
-├── telegram_bot.py      PersonaBot class — messaging, proactive scheduler
+├── telegram_bot.py      PersonaBot class — messaging, agent scheduler
 ├── brain.py             LLM interface — routes to Claude or Ollama
 ├── context.py           Context assembly — builds full prompts from all sources
-├── memory.py            Persistent storage — messages, summaries, embeddings, triggers
+├── memory.py            Persistent storage — messages, summaries, triggers, agent state
 ├── embeddings.py        Vector embeddings — generates embeddings via Ollama
 ├── summarizer.py        Summarization engine — compresses old conversations via Claude
-├── proactive.py         Proactive messaging — scheduler, decision gate, composer
+├── proactive.py         Agent bootstrap and scheduler
+├── agent.py             Agent cycle — perceive, reason, act, plan
 ├── tokens.py            Token counting — abstract interface for budget enforcement
 ├── config.py            Loads settings from .env
 ├── personas.py          Discovers and loads persona files
+├── tools/
+│   ├── __init__.py      Tool registry and factory
+│   ├── base.py          Tool and ToolMethod base classes
+│   ├── schedule_tool.py ScheduleTool — self-scheduling interface
+│   └── telegram_tool.py TelegramTool — Telegram send wrapper
 ├── personas/            Personality definitions (markdown)
 ├── data/                Per-persona databases + shared user context (gitignored)
 ├── debug/               Prompt dumps from debug mode (gitignored)
-├── tests/               Test suite (future: consolidate all tests here)
+├── tests/               Test suite
+│   └── test_stage5.py   60 tests for agent cycle, tools, parsing, validation
 ├── purcival@.service    Systemd template for background services
 ├── requirements.txt     Python dependencies
+├── STAGE5_AGENT_DESIGN.md  Design document for the self-scheduling agent
 ├── .env.example         Configuration template
 └── .gitignore           Keeps secrets, data, debug dumps, and artifacts out of git
 ```
@@ -318,7 +361,7 @@ purcival/
 
 **Claude** (via Anthropic API) — highest quality, costs per token, requires
 internet. Switch to it with `/provider claude` in Telegram. Also used for
-summarization regardless of active chat provider.
+summarization and agent reasoning regardless of active chat provider.
 
 **Ollama** (local inference) — free, private, runs on your GPU. Purcival
 currently runs Mistral Small 3.2 on an RTX 3060 (12GB VRAM). A separate
@@ -366,10 +409,19 @@ TELEGRAM_TOKEN_JO=
 - [x] Debug mode — dump full prompts for inspection
 - [x] Cost optimization — balanced token budgets (~20K typical)
 - [x] Safe clear — disabled on Telegram, confirmation required on CLI
-- [ ] Organize tests into tests/ directory
+- [x] Self-scheduling agent — plans own day, manages own wake-ups
+- [x] Tool interface — extensible base class for agent capabilities
+- [x] ScheduleTool — agent manages its own trigger schedule
+- [x] TelegramTool — uniform interface for proactive messaging
+- [x] Action validation — 7-check code-level gate, budget enforcement
+- [x] Narrative state — LLM maintains prose understanding across cycles
+- [x] Reasoning log — full traces for debugging (7-day retention)
+- [x] User message plan updates — <schedule_updates> tag system
+- [x] Chat ID persistence — survives service restarts
 - [ ] Google Calendar integration (read-only)
 - [ ] Gmail integration (read-only)
-- [ ] Reminder parsing — teach LLM to create triggers from natural language
+- [ ] Execute-tier approval flow via Telegram
+- [ ] Large local model for async agent reasoning
 
 ## Requirements
 

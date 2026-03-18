@@ -35,6 +35,11 @@ DEFAULT_PERSONA = os.getenv("DEFAULT_PERSONA", "default")
 # Message @userinfobot on Telegram to find yours.
 TELEGRAM_ALLOWED_USER_ID = os.getenv("TELEGRAM_ALLOWED_USER_ID", "")
 
+# Your Telegram chat ID — required for proactive messaging.
+# Set this once and proactive messages work immediately on restart,
+# no need to send the bot a message first.
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
 
 def get_telegram_token(persona_name: str) -> str:
     """

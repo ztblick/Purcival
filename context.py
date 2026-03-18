@@ -10,16 +10,18 @@ The system prompt is assembled from sections, each with a token budget:
 
     1. Persona prompt          (< 2,000 tokens)  — from personas/*.md
     2. User context            (< 2,000 tokens)  — from data/user_context.md
-    3. Conversation summaries  (< 8,000 tokens)  — retrieved by semantic similarity
-    4. Additional context      (< 8,000 tokens)  — calendar, email, etc. (future)
+    3. Current session         (< 500 tokens)    — time, device type
+    4. Scheduled plan          (< 2,000 tokens)  — agent's upcoming wake-ups (Stage 5)
+    5. Conversation summaries  (< 8,000 tokens)  — retrieved by semantic similarity
+    6. Additional context      (< 8,000 tokens)  — calendar, email, etc. (future)
 
-The messages array contains recent verbatim messages (< 32,000 tokens).
+The messages array contains recent verbatim messages (< 8,000 tokens).
 
-Summary retrieval works by embedding the user's most recent message and
-finding stored summaries with the highest cosine similarity. Summaries
-below a minimum similarity threshold are excluded to avoid injecting
-irrelevant context. A few recent summaries are always included regardless
-of similarity to maintain conversational continuity.
+Stage 5 addition: The scheduled plan section shows the agent's upcoming
+wake-ups in user conversations. This lets the LLM notice when a user's
+message conflicts with the plan and include <schedule_updates> tags in
+its response. The telegram_bot.py response handler strips these tags
+before sending to the user.
 
 To add a new context source in the future:
     1. Write a function that returns a string (the content) or empty string
@@ -28,6 +30,7 @@ To add a new context source in the future:
     That's it — the assembly loop handles truncation and formatting.
 """
 
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -42,47 +45,24 @@ DEVICE_TERMINAL = "terminal"
 DEVICE_TELEGRAM = "telegram"
 
 # --- Token Budgets ---
-# These control how much space each section gets in the prompt.
-# The budgets represent upper bounds — typical usage will be lower.
-# Typical total: ~20K tokens. Upper bound: ~32K tokens.
-#
-# The key insight: verbatim messages are the biggest cost driver
-# because they're sent on every API call. Keeping this window
-# moderate and relying on summaries for older context saves money
-# without sacrificing quality.
-
 BUDGET_PERSONA = 2_000
 BUDGET_USER_CONTEXT = 2_000
-BUDGET_SUMMARIES = 8_000       # Upper bound; typically ~4K
-BUDGET_ADDITIONAL = 8_000      # Upper bound; reserved for future integrations
-BUDGET_MESSAGES = 8_000        # ~25-35 exchanges; older messages get summarized
+BUDGET_SCHEDULED_PLAN = 2_000
+BUDGET_SUMMARIES = 8_000
+BUDGET_ADDITIONAL = 8_000
+BUDGET_MESSAGES = 8_000
 
 # --- Summary Retrieval Settings ---
-
-# Maximum number of summaries to retrieve per query.
 SUMMARY_TOP_K = 8
-
-# Minimum cosine similarity to include a summary. Summaries below
-# this threshold are considered irrelevant noise. Based on observed
-# scores: related text ~0.5-0.8, unrelated ~0.2-0.4.
-# Start conservative; tune based on real data.
 SUMMARY_MIN_SIMILARITY = 0.35
-
-# Always include the N most recent summaries regardless of similarity.
-# This maintains conversational continuity — the persona should know
-# what was discussed recently even if the current message seems
-# unrelated. Set to 0 to disable.
 SUMMARY_ALWAYS_RECENT = 2
 
 # --- File Paths ---
-
 DATA_DIR = Path(__file__).parent / "data"
 USER_CONTEXT_PATH = DATA_DIR / "user_context.md"
 
 
 # --- Context Source Loaders ---
-# Each loader returns a string. If the source is unavailable or empty,
-# it returns an empty string. The assembly loop skips empty sections.
 
 def _load_user_context() -> str:
     """
@@ -122,6 +102,72 @@ def _load_session_context(device: str) -> str:
         )
 
     return "\n\n".join(parts)
+
+
+def _load_scheduled_plan(memory: PersonaMemory) -> str:
+    """
+    Load the agent's upcoming scheduled wake-ups for inclusion in
+    the user conversation context.
+
+    This enables the LLM to notice when a user's message conflicts
+    with the agent's plan and include schedule updates in its response.
+
+    Only included for Telegram conversations (the agent plans only
+    run for personas with a schedule configured).
+
+    Returns empty string if no plan exists or no schedule is configured.
+    """
+    schedule = memory.get_schedule_config()
+    if not schedule:
+        return ""
+
+    active = memory.get_active_triggers()
+    now = datetime.now()
+    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    future = [t for t in active if t["fire_at"] > now_str]
+    if not future:
+        return ""
+
+    lines = [
+        "You have an active schedule of planned wake-ups. If the user's "
+        "message affects any of these plans, include schedule updates in "
+        "your response using <schedule_updates> tags. Otherwise, respond "
+        "normally without mentioning your schedule.\n",
+        "YOUR SCHEDULED PLAN:",
+    ]
+
+    for t in future[:15]:  # Cap at 15 to stay within budget
+        purpose = ""
+        try:
+            ctx = json.loads(t["context"]) if t["context"] else {}
+            purpose = ctx.get("purpose", t.get("context", ""))
+        except (json.JSONDecodeError, TypeError):
+            purpose = t.get("context", "")
+
+        fire_time = t["fire_at"]
+        try:
+            fire_dt = datetime.strptime(fire_time, "%Y-%m-%d %H:%M:%S")
+            if fire_dt.date() == now.date():
+                time_display = f"Today {fire_dt.strftime('%H:%M')}"
+            else:
+                time_display = fire_dt.strftime("%a %m/%d %H:%M")
+        except ValueError:
+            time_display = fire_time
+
+        lines.append(f"  #{t['id']}  {time_display}  — {purpose}")
+
+    lines.append(
+        "\nTo update your plan, append <schedule_updates> tags after your "
+        "response with commands like:\n"
+        "  schedule.modify_wakeup(id=42, time=\"2026-03-16 14:00\", "
+        "purpose=\"New purpose\")\n"
+        "  schedule.cancel_wakeup(id=43)\n"
+        "  schedule.add_wakeup(time=\"2026-03-16 15:00\", "
+        "purpose=\"New task\", tools=[\"telegram\"])"
+    )
+
+    return "\n".join(lines)
 
 
 def _load_summaries(memory: PersonaMemory, current_message: str) -> str:
@@ -227,7 +273,6 @@ def _load_additional_context() -> str:
     formatted string. This function will call them and combine
     the results.
     """
-    # TODO: Implement external integrations (Stages 5+)
     return ""
 
 
@@ -273,14 +318,11 @@ def _build_system_prompt(
     with clear separators so the LLM can distinguish between them.
     Empty sections are skipped entirely.
     """
-    # Define sections: (label, content, budget)
-    # The label helps the LLM understand what each block is.
-    # Order matters — persona identity comes first, then user context,
-    # then session info, then memory, then supplementary info.
     sections = [
         ("PERSONA", persona_prompt, BUDGET_PERSONA),
         ("ABOUT THE USER", _load_user_context(), BUDGET_USER_CONTEXT),
         ("CURRENT SESSION", _load_session_context(device), 500),
+        ("YOUR SCHEDULED PLAN", _load_scheduled_plan(memory), BUDGET_SCHEDULED_PLAN),
         ("RELEVANT PAST CONVERSATIONS", _load_summaries(memory, current_message), BUDGET_SUMMARIES),
         ("ADDITIONAL CONTEXT", _load_additional_context(), BUDGET_ADDITIONAL),
     ]
