@@ -39,12 +39,12 @@ def _ensure_claude():
     return _claude_client
 
 
-def _ask_claude(messages: list[dict], system: str) -> str:
+def _ask_claude(messages: list[dict], system: str, max_tokens: int = 2048) -> str:
     """Send messages to Claude via the Anthropic API."""
     client = _ensure_claude()
     response = client.messages.create(
         model=config.CLAUDE_MODEL,
-        max_tokens=2048,
+        max_tokens=max_tokens,
         system=system,
         messages=messages,
     )
@@ -53,7 +53,7 @@ def _ask_claude(messages: list[dict], system: str) -> str:
 
 # --- Ollama Provider ---
 
-def _ask_ollama(messages: list[dict], system: str) -> str:
+def _ask_ollama(messages: list[dict], system: str, max_tokens: int = 2048) -> str:
     """
     Send messages to a local model via Ollama's OpenAI-compatible API.
 
@@ -73,6 +73,7 @@ def _ask_ollama(messages: list[dict], system: str) -> str:
         json={
             "model": config.OLLAMA_MODEL,
             "messages": full_messages,
+            "max_tokens": max_tokens,
         },
         timeout=120,  # Local models can be slow on first response
     )
@@ -95,6 +96,7 @@ def ask(
     messages: list[dict],
     system: str | None = None,
     provider: str | None = None,
+    max_tokens: int = 2048,
 ) -> str:
     """
     Send a conversation to an LLM and get a response.
@@ -103,6 +105,8 @@ def ask(
         messages: List of message dicts with 'role' and 'content'.
         system:   The system prompt (persona). Required — passed in by the caller.
         provider: "claude" or "ollama". Defaults to config.DEFAULT_PROVIDER.
+        max_tokens: Maximum tokens in the response. Default 2048 for
+            conversations, agent reasoning should use 4096.
 
     Returns:
         The assistant's response as a string.
@@ -122,4 +126,4 @@ def ask(
             f"Unknown provider '{provider}'. Options: {list(_PROVIDERS.keys())}"
         )
 
-    return handler(messages, system)
+    return handler(messages, system, max_tokens=max_tokens)

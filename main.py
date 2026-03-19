@@ -299,6 +299,98 @@ def _handle_schedule(memory: PersonaMemory, persona_name: str):
         )
 
 
+def _handle_plan(memory: PersonaMemory, persona_name: str, persona_prompt: str):
+    """
+    Manually run a planning cycle from the terminal.
+
+    Synthesizes a planning cycle trigger and runs the full agent cycle.
+    Any Telegram messages the agent tries to send are printed to the
+    terminal instead (the CLI doesn't have a live Telegram connection).
+
+    This is useful for:
+        - Testing the agent cycle after code changes
+        - Recovering from a failed morning planning cycle
+        - Seeing what the agent would do without waiting for a trigger
+    """
+    import asyncio
+    import json
+    from datetime import datetime
+    from agent import run_agent_cycle
+    from tools import create_tools
+
+    console.print(
+        f"  [system]Running planning cycle for[/system] "
+        f"[persona]{persona_name}[/persona][system]...[/system]\n"
+    )
+
+    # Collect messages the agent tries to send via Telegram
+    cli_messages = []
+
+    async def cli_send_fn(text: str):
+        """Capture Telegram messages for terminal display."""
+        cli_messages.append(text)
+
+    # Synthesize a planning cycle trigger
+    now = datetime.now()
+    trigger = {
+        "id": None,
+        "type": "agent_cycle",
+        "fire_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "context": json.dumps({
+            "purpose": "Manual planning cycle — review all tools and plan the day",
+            "tools": [],
+        }),
+        "recurring": None,
+    }
+
+    tools = create_tools(memory, cli_send_fn)
+
+    try:
+        success = asyncio.run(
+            run_agent_cycle(
+                trigger=trigger,
+                memory=memory,
+                tools=tools,
+                persona_prompt=persona_prompt,
+                send_fn=cli_send_fn,
+            )
+        )
+    except Exception as e:
+        console.print(f"  [error]Planning cycle failed: {e}[/error]\n")
+        return
+
+    if success:
+        # Show any messages the agent composed
+        if cli_messages:
+            console.print(f"  [system]Agent composed {len(cli_messages)} message(s):[/system]\n")
+            for msg in cli_messages:
+                _print_response(msg, "agent", persona_name)
+                console.print()
+        else:
+            console.print("  [system]Planning cycle complete — no messages sent.[/system]")
+
+        # Show what was scheduled
+        active = memory.get_active_triggers()
+        now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+        future = [t for t in active if t["fire_at"] > now_str]
+        if future:
+            console.print(f"  [system]{len(future)} upcoming trigger(s):[/system]")
+            for t in future[:10]:
+                try:
+                    ctx = json.loads(t["context"]) if t["context"] else {}
+                    purpose = ctx.get("purpose", "")
+                except (json.JSONDecodeError, TypeError):
+                    purpose = t.get("context", "")
+                console.print(f"    #{t['id']}  {t['fire_at']}  — {purpose[:70]}")
+
+        console.print()
+    else:
+        console.print(
+            "  [error]Planning cycle failed (truncated or error). "
+            "Check the reasoning log for details.[/error]\n"
+        )
+
+
 def _print_banner(provider: str, persona_name: str, memory: PersonaMemory, debug: bool = False):
     """Print the startup banner."""
     total = memory.get_message_count()
@@ -337,6 +429,7 @@ def _print_banner(provider: str, persona_name: str, memory: PersonaMemory, debug
         "  /ollama    — switch to Ollama\n"
         "  /persona   — switch persona\n"
         "  /schedule  — configure agent wake/sleep times & action limit\n"
+        "  /plan      — manually run a planning cycle (reads calendar, plans day)\n"
         "  /status    — show current state\n"
         "  /debug     — toggle prompt dumping to debug/\n"
         "  clear      — reset conversation (erases memory!)\n"
@@ -417,6 +510,11 @@ def chat_loop(provider: str, persona_name: str, debug: bool = False):
         # --- Schedule configuration ---
         if user_input.lower() == "/schedule":
             _handle_schedule(memory, persona_name)
+            continue
+
+        # --- Manual planning cycle ---
+        if user_input.lower() == "/plan":
+            _handle_plan(memory, persona_name, persona_prompt)
             continue
 
         # --- Status ---

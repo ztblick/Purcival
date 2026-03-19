@@ -42,6 +42,19 @@ logger = logging.getLogger(__name__)
 # reliable structured output. Swap to "ollama" for local experiments.
 AGENT_REASONING_PROVIDER = "claude"
 
+# Token budget for agent reasoning responses. Higher than the default
+# 2048 for conversations because agent responses contain four structured
+# sections (reasoning, actions, schedule, narrative_state). Planning
+# cycles with rich calendar data need room for the LLM to think AND
+# output all four sections.
+AGENT_REASONING_MAX_TOKENS = 4096
+
+# Maximum retries for a failed planning cycle before notifying the user.
+# A planning cycle "fails" if the LLM response is truncated (missing
+# required tags). After this many consecutive failures, the agent sends
+# a Telegram notification and stops retrying until the next day.
+PLANNING_CYCLE_MAX_RETRIES = 3
+
 # All tool names that exist in the system, even if not instantiated
 # in the current process. Used by apply_schedule_updates to validate
 # tool names in scheduled wake-ups. The CLI doesn't have TelegramTool
@@ -820,6 +833,7 @@ async def run_agent_cycle(
             messages,
             system=system_prompt,
             provider=AGENT_REASONING_PROVIDER,
+            max_tokens=AGENT_REASONING_MAX_TOKENS,
         )
     except Exception as e:
         logger.error(f"Cycle {cycle_id}: reasoning failed: {e}")
@@ -834,13 +848,36 @@ async def run_agent_cycle(
             provider=AGENT_REASONING_PROVIDER,
         )
         _ensure_future_plan(memory, tools, schedule_config)
-        return
+        return False  # Signal failure for retry logic
 
     # --- Parse the response ---
     reasoning = _extract_tag(llm_response, "reasoning") or ""
     actions_text = _extract_tag(llm_response, "actions") or "none"
     schedule_text = _extract_tag(llm_response, "schedule") or "none"
     narrative_out = _extract_tag(llm_response, "narrative_state") or ""
+
+    # Detect truncated responses — if the LLM ran out of tokens, it
+    # won't have produced all four required tags. A response with
+    # reasoning but no actions/schedule/narrative tags is truncated.
+    truncated = _is_response_truncated(llm_response)
+    if truncated:
+        logger.warning(
+            f"Cycle {cycle_id}: response appears truncated "
+            f"(missing required tags). Response length: {len(llm_response)} chars"
+        )
+        memory.add_reasoning_log(
+            cycle_id=cycle_id,
+            trigger_id=trigger_id,
+            trigger_purpose=trigger_purpose,
+            tool_contexts=json.dumps(tool_contexts) if tool_contexts else None,
+            narrative_in=narrative_state,
+            llm_response=llm_response,
+            skipped=True,
+            skip_reason="Response truncated — missing required tags",
+            provider=AGENT_REASONING_PROVIDER,
+        )
+        _ensure_future_plan(memory, tools, schedule_config)
+        return False  # Signal failure for retry logic
 
     logger.info(f"Cycle {cycle_id}: reasoning complete, parsing actions")
 
@@ -1039,8 +1076,34 @@ async def run_agent_cycle(
         f"{len(schedule_changes_applied)} schedule changes"
     )
 
+    return True  # Signal success
+
 
 # --- Helper Functions ---
+
+def _is_response_truncated(llm_response: str) -> bool:
+    """
+    Detect if an agent reasoning response was truncated by the token limit.
+
+    A complete response has all four required tags: reasoning, actions,
+    schedule, and narrative_state. If any of the last three are missing
+    (actions, schedule, narrative_state), the response was likely
+    truncated — the LLM ran out of tokens while still writing.
+
+    We check for the closing tags since the LLM writes them in order.
+    If </actions> is missing, the response was cut off during or before
+    the actions section. If </narrative_state> is missing, it was cut
+    off near the end.
+    """
+    # Must have at least the actions closing tag to be considered complete.
+    # The reasoning tag alone doesn't count — that's where truncation
+    # typically happens (the LLM spends too many tokens thinking).
+    has_actions = "</actions>" in llm_response
+    has_schedule = "</schedule>" in llm_response
+    has_narrative = "</narrative_state>" in llm_response
+
+    return not (has_actions and has_schedule and has_narrative)
+
 
 def _parse_trigger_context(trigger: dict) -> dict:
     """
@@ -1097,44 +1160,88 @@ def _ensure_future_plan(
     schedule_config: dict | None,
 ):
     """
-    Called at the end of every agent cycle. If no future planning cycle
-    exists, seed one for tomorrow's start_time as a safety net.
+    Called at the end of every agent cycle. Ensures exactly one future
+    planning cycle exists per day, and deduplicates if the LLM and the
+    safety net both created one.
 
-    This checks specifically for planning cycles (empty tools list),
-    not just any future trigger. Targeted wake-ups (pre-meeting
-    reminders, etc.) don't count — the agent needs a planning cycle
-    to discover new events and schedule its day.
-
-    This is a backstop for when the LLM reasons but forgets to schedule
-    its next planning cycle. It should rarely fire — the LLM is prompted
-    to manage its own schedule. But if it does forget, this ensures the
-    agent wakes up tomorrow rather than going silent forever.
+    Two responsibilities:
+    1. If no future planning cycle exists, seed one for tomorrow's
+       start_time.
+    2. If multiple planning cycles exist for the same day, keep only
+       the earliest and delete the rest.
     """
-    if memory.has_future_planning_cycle():
-        return  # Agent has a planning cycle scheduled
-
     if not schedule_config:
         return  # No schedule configured, agent is passive
 
-    # Safety net: schedule for tomorrow's start_time
-    now = datetime.now()
-    start_h, start_m = map(int, schedule_config["start_time"].split(":"))
+    if not memory.has_future_planning_cycle():
+        # Safety net: schedule for tomorrow's start_time
+        now = datetime.now()
+        start_h, start_m = map(int, schedule_config["start_time"].split(":"))
 
-    from datetime import timedelta
-    tomorrow_start = now.replace(
-        hour=start_h, minute=start_m, second=0, microsecond=0
-    ) + timedelta(days=1)
+        from datetime import timedelta
+        tomorrow_start = now.replace(
+            hour=start_h, minute=start_m, second=0, microsecond=0
+        ) + timedelta(days=1)
 
-    memory.add_trigger(
-        trigger_type="agent_cycle",
-        fire_at=tomorrow_start.strftime("%Y-%m-%d %H:%M:%S"),
-        context=json.dumps({
-            "purpose": "Planning cycle — review all tools and plan the day",
-            "tools": [],
-        }),
-        recurring=None,
-    )
-    logger.info(f"Safety net: no planning cycle found, seeded for {tomorrow_start}")
+        memory.add_trigger(
+            trigger_type="agent_cycle",
+            fire_at=tomorrow_start.strftime("%Y-%m-%d %H:%M:%S"),
+            context=json.dumps({
+                "purpose": "Planning cycle — review all tools and plan the day",
+                "tools": [],
+            }),
+            recurring=None,
+        )
+        logger.info(f"Safety net: no planning cycle found, seeded for {tomorrow_start}")
+
+    # Deduplicate: if multiple planning cycles exist for the same day,
+    # keep only the earliest per day and delete the rest.
+    _deduplicate_planning_cycles(memory)
+
+
+def _deduplicate_planning_cycles(memory: PersonaMemory):
+    """
+    Remove duplicate planning cycles for the same day.
+
+    Both the LLM and the safety net can create planning cycles. If
+    both fire for the same day, we end up with duplicates. This
+    function groups future planning cycles by date, keeps the earliest
+    per day, and deletes the rest.
+    """
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    active = memory.get_active_triggers()
+
+    # Collect future planning cycles grouped by date
+    by_date: dict[str, list[dict]] = {}
+    for trigger in active:
+        if trigger["fire_at"] <= now_str:
+            continue
+
+        try:
+            ctx = json.loads(trigger["context"]) if trigger["context"] else {}
+            if len(ctx.get("tools", [])) != 0:
+                continue  # Not a planning cycle
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        date = trigger["fire_at"][:10]  # "YYYY-MM-DD"
+        if date not in by_date:
+            by_date[date] = []
+        by_date[date].append(trigger)
+
+    # For each date with multiple planning cycles, keep the earliest
+    for date, cycles in by_date.items():
+        if len(cycles) <= 1:
+            continue
+
+        # Sort by fire_at, keep the first, delete the rest
+        cycles.sort(key=lambda t: t["fire_at"])
+        for duplicate in cycles[1:]:
+            memory.delete_trigger(duplicate["id"])
+            logger.info(
+                f"Deduplicated planning cycle #{duplicate['id']} "
+                f"on {date} (keeping #{cycles[0]['id']})"
+            )
 
 
 # --- Schedule Updates in Conversation Responses ---

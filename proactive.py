@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from memory import PersonaMemory
-from agent import run_agent_cycle
+from agent import run_agent_cycle, PLANNING_CYCLE_MAX_RETRIES
 from tools import create_tools
 
 logger = logging.getLogger(__name__)
@@ -108,26 +108,66 @@ def start_scheduler(
     async def check_triggers():
         due = memory.get_due_triggers()
         for trigger in due:
+            # Determine if this is a planning cycle (for retry logic)
+            is_planning = False
             try:
-                # Create tools for this cycle
-                tools = create_tools(memory, send_fn)
+                ctx = json.loads(trigger.get("context", "{}"))
+                is_planning = len(ctx.get("tools", [])) == 0
+            except (json.JSONDecodeError, TypeError):
+                pass
 
-                # Run the full agent cycle
-                await run_agent_cycle(
-                    trigger=trigger,
-                    memory=memory,
-                    tools=tools,
-                    persona_prompt=persona_prompt,
-                    send_fn=send_fn,
-                )
-            except Exception as e:
+            success = False
+            attempts = 0
+            max_attempts = PLANNING_CYCLE_MAX_RETRIES if is_planning else 1
+
+            while attempts < max_attempts and not success:
+                attempts += 1
+                try:
+                    tools = create_tools(memory, send_fn)
+                    success = await run_agent_cycle(
+                        trigger=trigger,
+                        memory=memory,
+                        tools=tools,
+                        persona_prompt=persona_prompt,
+                        send_fn=send_fn,
+                    )
+
+                    if not success and attempts < max_attempts:
+                        logger.warning(
+                            f"Planning cycle attempt {attempts}/{max_attempts} "
+                            f"failed for trigger #{trigger['id']}, retrying..."
+                        )
+
+                except Exception as e:
+                    logger.error(
+                        f"Error in agent cycle for trigger #{trigger['id']} "
+                        f"(attempt {attempts}/{max_attempts}): {e}",
+                        exc_info=True,
+                    )
+
+            # If a planning cycle failed all retries, notify the user
+            if is_planning and not success:
                 logger.error(
-                    f"Error in agent cycle for trigger #{trigger['id']}: {e}",
-                    exc_info=True,
+                    f"Planning cycle failed {max_attempts} times for "
+                    f"trigger #{trigger['id']}"
                 )
+                if send_fn:
+                    try:
+                        await send_fn(
+                            f"⚠️ My morning planning cycle failed "
+                            f"{max_attempts} times in a row. I wasn't able "
+                            f"to read your calendar or plan the day. "
+                            f"I'll try again tomorrow at the next planning "
+                            f"cycle. Check the reasoning log if you want "
+                            f"to investigate."
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to send planning failure notification: {e}")
 
-            # Mark trigger as fired regardless of cycle outcome.
-            # The agent manages its own future triggers via ScheduleTool.
+                # Ensure tomorrow's planning cycle exists even after failure
+                ensure_agent_has_plan(memory)
+
+            # Mark trigger as fired regardless of outcome.
             memory.mark_trigger_fired(trigger["id"])
 
     scheduler.add_job(check_triggers, "interval", seconds=60)
