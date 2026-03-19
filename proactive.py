@@ -32,26 +32,19 @@ logger = logging.getLogger(__name__)
 
 def ensure_agent_has_plan(memory: PersonaMemory):
     """
-    Called at service startup. If no future triggers exist, seed a
-    planning cycle so the agent can bootstrap its day.
+    Called at service startup and after /schedule changes. If no future
+    planning cycle exists, seed one so the agent can bootstrap its day.
 
-    The agent takes it from there — the planning cycle discovers the
-    day's events and emails, plans targeted wake-ups, and manages
-    itself going forward.
+    A planning cycle is an agent_cycle trigger with an empty tools list.
+    Targeted wake-ups (pre-meeting reminders, etc.) do NOT satisfy this
+    check — the agent needs a planning cycle to discover the day's
+    events and schedule targeted wake-ups around them.
 
     If no schedule is configured via /schedule, this does nothing.
     The persona operates in user-initiated-only mode.
     """
-    now = datetime.now()
-    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
-
-    active = memory.get_active_triggers()
-    future_triggers = [t for t in active if t["fire_at"] > now_str]
-
-    if future_triggers:
-        logger.info(
-            f"Agent has {len(future_triggers)} future triggers, no bootstrap needed"
-        )
+    if memory.has_future_planning_cycle():
+        logger.info("Agent has a future planning cycle, no bootstrap needed")
         return
 
     schedule = memory.get_schedule_config()
@@ -63,6 +56,7 @@ def ensure_agent_has_plan(memory: PersonaMemory):
         return
 
     # Determine next wake-up time based on operating hours
+    now = datetime.now()
     start_h, start_m = map(int, schedule["start_time"].split(":"))
     end_h, end_m = map(int, schedule["end_time"].split(":"))
 

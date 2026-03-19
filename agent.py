@@ -42,6 +42,13 @@ logger = logging.getLogger(__name__)
 # reliable structured output. Swap to "ollama" for local experiments.
 AGENT_REASONING_PROVIDER = "claude"
 
+# All tool names that exist in the system, even if not instantiated
+# in the current process. Used by apply_schedule_updates to validate
+# tool names in scheduled wake-ups. The CLI doesn't have TelegramTool
+# (no send_fn) but should still allow scheduling wake-ups that use it.
+# Add new tool names here when creating new tools.
+KNOWN_TOOL_NAMES = {"schedule", "telegram", "google_calendar"}
+
 
 # --- Response Parsing ---
 
@@ -1090,28 +1097,27 @@ def _ensure_future_plan(
     schedule_config: dict | None,
 ):
     """
-    Called at the end of every reasoning cycle (not skipped cycles).
-    If the agent didn't schedule any future triggers during reasoning,
-    seed a planning cycle for tomorrow's start_time as a safety net.
+    Called at the end of every agent cycle. If no future planning cycle
+    exists, seed one for tomorrow's start_time as a safety net.
+
+    This checks specifically for planning cycles (empty tools list),
+    not just any future trigger. Targeted wake-ups (pre-meeting
+    reminders, etc.) don't count — the agent needs a planning cycle
+    to discover new events and schedule its day.
 
     This is a backstop for when the LLM reasons but forgets to schedule
-    its next wake-up. It should rarely fire — the LLM is prompted to
-    manage its own schedule. But if it does forget, this ensures the
+    its next planning cycle. It should rarely fire — the LLM is prompted
+    to manage its own schedule. But if it does forget, this ensures the
     agent wakes up tomorrow rather than going silent forever.
     """
-    now = datetime.now()
-    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
-
-    active = memory.get_active_triggers()
-    future_triggers = [t for t in active if t["fire_at"] > now_str]
-
-    if future_triggers:
-        return  # Agent has a plan
+    if memory.has_future_planning_cycle():
+        return  # Agent has a planning cycle scheduled
 
     if not schedule_config:
         return  # No schedule configured, agent is passive
 
     # Safety net: schedule for tomorrow's start_time
+    now = datetime.now()
     start_h, start_m = map(int, schedule_config["start_time"].split(":"))
 
     from datetime import timedelta
@@ -1128,7 +1134,7 @@ def _ensure_future_plan(
         }),
         recurring=None,
     )
-    logger.info(f"Safety net: agent forgot to plan, seeded for {tomorrow_start}")
+    logger.info(f"Safety net: no planning cycle found, seeded for {tomorrow_start}")
 
 
 # --- Schedule Updates in Conversation Responses ---
@@ -1173,6 +1179,13 @@ def apply_schedule_updates(schedule_lines: list[str], memory: PersonaMemory) -> 
     Uses the same parsing and validation logic as the agent cycle.
     Invalid commands are logged and skipped.
 
+    The registered tool names include all known tools, not just the
+    ones instantiated in the current process. This is important
+    because the CLI doesn't have a Telegram send_fn, so TelegramTool
+    isn't created — but the agent should still be able to schedule
+    wake-ups that use Telegram. The trigger will fire in the Telegram
+    service process where the tool IS available.
+
     Args:
         schedule_lines: Raw schedule command strings from the LLM.
         memory: The persona's memory instance.
@@ -1185,7 +1198,12 @@ def apply_schedule_updates(schedule_lines: list[str], memory: PersonaMemory) -> 
 
     tools = create_tools(memory)
     schedule_config = memory.get_schedule_config()
-    registered_tools = set(tools.keys())
+
+    # Include all known tool names — not just the ones instantiated
+    # in this process. The CLI won't have TelegramTool or possibly
+    # GoogleCalendarTool, but scheduled triggers that reference them
+    # will fire in the Telegram service where they ARE available.
+    registered_tools = set(tools.keys()) | KNOWN_TOOL_NAMES
     results = []
 
     for line in schedule_lines:

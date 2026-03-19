@@ -780,6 +780,37 @@ class PersonaMemory:
         finally:
             conn.close()
 
+    def has_future_planning_cycle(self) -> bool:
+        """
+        Check whether at least one future planning cycle exists.
+
+        A planning cycle is an agent_cycle trigger with an empty tools
+        list in its JSON context: {"tools": []}. Targeted wake-ups
+        (with specific tools like ["telegram"]) do NOT count.
+
+        Used by ensure_agent_has_plan and _ensure_future_plan to
+        determine whether a planning cycle needs to be seeded. The
+        agent must always have at least one future planning cycle —
+        without it, the agent can't discover new calendar events,
+        plan its day, or schedule further wake-ups.
+        """
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        active = self.get_active_triggers()
+
+        for trigger in active:
+            if trigger["fire_at"] <= now_str:
+                continue  # Not in the future
+
+            try:
+                ctx = json.loads(trigger["context"]) if trigger["context"] else {}
+                tools = ctx.get("tools", [])
+                if len(tools) == 0:
+                    return True  # Found a future planning cycle
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+        return False
+
     def get_trigger(self, trigger_id: int) -> dict | None:
         """Get a single trigger by ID, or None if not found."""
         conn = self._connect()
