@@ -10,10 +10,10 @@ survive restarts, reboots, and crashes. Older conversations are automatically
 summarized and retrieved by semantic similarity when they become relevant again.
 
 The primary persona (Jo) is a **self-scheduling autonomous agent** that
-plans its own day, manages its own wake-up schedule, and sends proactive
-messages via Telegram. The agent reasons about what to do using Claude,
-schedules targeted wake-ups with specific purposes, and adjusts its plan
-when the user's situation changes.
+plans its own day, manages its own wake-up schedule, reads your Google
+Calendar, and sends proactive messages via Telegram. The agent reasons about
+what to do using Claude, schedules targeted wake-ups with specific purposes,
+and adjusts its plan when your situation changes.
 
 ## How it works
 
@@ -48,6 +48,7 @@ Your phone (Telegram)                         Your Linux box
     │            │   Check triggers every 60s│     │
     │            │   If due → run agent cycle│     │
     │            │     ├─ Perceive (tools)   │     │
+    │            │     │  └─ Google Calendar ─┼──→ Google Calendar API
     │            │     ├─ Reason (Claude) ───┼──→ Claude API
     │            │     ├─ Validate + act     │     │
     │            │     ├─ Update schedule    │     │
@@ -96,7 +97,8 @@ Terminal commands: `/persona`, `/claude`, `/ollama`, `/schedule`, `/status`,
 The terminal interface shows a spinner when summarization is running
 ("Committing conversation to memory...") and allows longer, more detailed
 responses from the LLM. The `clear` command requires typed confirmation
-before deleting data.
+before deleting data. Schedule updates in LLM responses are stripped and
+applied automatically — status messages show what was applied or rejected.
 
 ### Telegram (for daily use from your phone)
 
@@ -126,7 +128,7 @@ to prevent accidental data loss — use the terminal interface to clear history.
 3. Add tokens and user ID to `.env`:
    ```
    TELEGRAM_ALLOWED_USER_ID=123456789
-   TELEGRAM_TOKEN_PURCIVAL=7123456:AAF...
+   TELEGRAM_TOKEN_JO=7123456:AAF...
    TELEGRAM_TOKEN_ADA=7234567:BBG...
    ```
 4. Test: `python run_telegram.py --persona jo`
@@ -136,8 +138,8 @@ to prevent accidental data loss — use the terminal interface to clear history.
 1. Edit `purcival@.service` — replace `YOUR_USERNAME` with your Linux username
 2. `sudo cp purcival@.service /etc/systemd/system/`
 3. `sudo systemctl daemon-reload`
-4. `sudo systemctl start purcival@purcival`
-5. `sudo systemctl enable purcival@purcival`
+4. `sudo systemctl start purcival@jo`
+5. `sudo systemctl enable purcival@jo`
 
 Useful commands:
 ```bash
@@ -166,15 +168,15 @@ personas/
 the point. They remember the details of your life — deadlines, commitments,
 people's names — and keeps you on track with your goals. They give gentle
 reminders when things are slipping and is honest when you need to hear it.
-They is the primary persona with autonomous agent capabilities — Jo plans the
-day, schedules wake-ups, and sends proactive messages via Telegram.
+They are the primary persona with autonomous agent capabilities — Jo plans the
+day, reads your Google Calendar, schedules wake-ups, and sends proactive
+messages via Telegram.
 
 **Ada** is a technical expert and thinking partner. Sharp, curious, and a
 little irreverent. She is who you talk to about coding, systems design,
 math, science, and engineering. She explains things clearly without dumbing
 them down, pushes back on weak ideas, and gets excited when a conversation
 goes somewhere interesting. She does not care about schedules or to-do lists.
-
 
 To add a new persona: create a `.md` file in `personas/`, create a Telegram
 bot with @BotFather, add the token to `.env`, and start the service. The
@@ -187,19 +189,19 @@ a fixed interval, the agent schedules purposeful wake-ups with specific
 contexts:
 
 - "Wake me at 9:52 to encourage Zach before his 10:00 meeting"
-- "Wake me at 22:30 to remind Zach to start winding down
-- "Wake me tomorrow at 9:00 for morning planning"
+- "Wake me at 22:30 to remind Zach to start winding down"
+- "Wake me tomorrow at 6:00 for morning planning"
 
 ### How it works
 
 1. **Bootstrap:** At the configured wake time, the system seeds a planning
-   cycle. The agent wakes up, looks at what it knows, and plans its day.
+   cycle. The agent wakes up, reads your calendar, and plans its day.
 2. **Planning cycles:** The agent schedules periodic check-ins for itself
    to scan for new information. Empty tools list = load all tools.
 3. **Targeted wake-ups:** The agent schedules specific wake-ups with a
    purpose and the tools it needs. Each cycle reasons about its purpose.
 4. **User messages update plans:** When you tell the agent something
-   time-sensitive ("Tessa should take Tylenol at 9pm"), it silently
+   time-sensitive ("remind me to give Tessa Tylenol at 9pm"), it silently
    schedules a reminder. No separate planning cycle needed.
 
 ### Configuring the agent
@@ -210,11 +212,13 @@ Use `/schedule` in the terminal to set:
 - **Daily action limit:** Max messages/drafts/executions per day (default: 25)
 
 ```bash
-python main.py --persona purcival
+python main.py --persona jo
 # Then type /schedule and follow the prompts
 ```
 
 The running Telegram service picks up schedule changes without restarting.
+Changing operating hours removes old planning cycles and seeds new ones.
+Targeted wake-ups (reminders, meeting prep) are always preserved.
 
 ### Guardrails
 
@@ -223,6 +227,7 @@ All enforced by code, not just the LLM prompt:
 - Daily action budget caps how much the agent does
 - Execute-tier actions (sending email, creating events) require explicit approval
 - Every action goes through a 7-check validation gate before execution
+- `/schedule` never deletes targeted wake-ups
 
 ### Tools
 
@@ -232,12 +237,39 @@ The agent interacts with the world through tools:
 |------|-------------|--------|
 | **ScheduleTool** | Agent manages its own wake-up schedule | Built |
 | **TelegramTool** | Send messages to the user | Built |
-| **GoogleCalendarTool** | Read/create calendar events | Planned |
+| **GoogleCalendarTool** | Read events from all visible calendars | Built |
 | **GmailTool** | Read/send email | Planned |
 
 Adding a new tool: create a class implementing the `Tool` interface in
 `tools/`, register it in `tools/__init__.py`. No changes to the agent
 loop needed.
+
+## Google Calendar integration
+
+The agent reads all calendars visible in your Google Calendar sidebar —
+personal, school, shared calendars, birthdays, etc. It detects new events,
+changed events, cancelled events, and imminent events (starting within 15
+minutes). Each event is tagged with which calendar it came from.
+
+### Setup
+
+1. Create a Google Cloud project and enable the Calendar API
+2. Create OAuth credentials and download the client secret JSON
+3. Run the auth flow once from the terminal:
+   ```bash
+   python -c "from google_auth import run_auth_flow; run_auth_flow('jo')"
+   ```
+4. See `GOOGLE_CALENDAR_SETUP.md` for detailed step-by-step instructions
+
+The agent automatically loads the calendar tool when credentials exist.
+No configuration needed — just run the auth flow and restart the service.
+
+### Error resilience
+
+If the Google Calendar API starts failing, the agent tracks consecutive
+failures. After 3 failures, it tells you via Telegram. After 10, it asks
+you to re-authorize. Success resets the counter. The agent never silently
+goes blind.
 
 ## Memory system
 
@@ -251,15 +283,15 @@ search to give each persona long-term memory.
 ```
 data/
 ├── user_context.md          ← shared context about you (manually maintained)
-├── purcival/
-│   └── memory.db            ← messages, summaries, triggers, agent state
+├── jo/
+│   ├── memory.db            ← messages, summaries, triggers, agent state
+│   └── google_credentials.json  ← Google OAuth tokens (gitignored)
 ├── ada/
 │   └── memory.db
-└── jo/
-    └── memory.db
+└── ...
 ```
 
-Each persona's memory is completely isolated — Purcival doesn't know what
+Each persona's memory is completely isolated — Jo doesn't know what
 you discussed with Ada, and vice versa. This is a deliberate design choice
 that mirrors how human relationships work.
 
@@ -293,7 +325,8 @@ In addition to conversation memory, the agent-enabled persona stores:
   the start of the next cycle for continuity. Append-only log with 30-day
   retention.
 - **Structured state** (`tool_state` table) — key-value store for each
-  tool's internal state (sync timestamps, seen IDs, event action history).
+  tool's internal state (sync timestamps, seen IDs, event action history,
+  calendar list cache, error tracking).
 - **Action log** (`agent_actions` table) — audit trail of every action
   taken or proposed, with 30-day retention.
 - **Reasoning log** (`reasoning_log` table) — full reasoning traces for
@@ -306,7 +339,7 @@ the LLM receives on each message.
 
 ```bash
 # Start with debug on
-python main.py --persona purcival --debug
+python main.py --persona jo --debug
 
 # Or toggle mid-session
 /debug
@@ -330,7 +363,8 @@ purcival/
 ├── embeddings.py        Vector embeddings — generates embeddings via Ollama
 ├── summarizer.py        Summarization engine — compresses old conversations via Claude
 ├── proactive.py         Agent bootstrap and scheduler
-├── agent.py             Agent cycle — perceive, reason, act, plan
+├── agent.py             Agent cycle + shared schedule update functions
+├── google_auth.py       Google OAuth2 flow + credential management
 ├── tokens.py            Token counting — abstract interface for budget enforcement
 ├── config.py            Loads settings from .env
 ├── personas.py          Discovers and loads persona files
@@ -338,11 +372,13 @@ purcival/
 │   ├── __init__.py      Tool registry and factory
 │   ├── base.py          Tool and ToolMethod base classes
 │   ├── schedule_tool.py ScheduleTool — self-scheduling interface
-│   └── telegram_tool.py TelegramTool — Telegram send wrapper
+│   ├── telegram_tool.py TelegramTool — Telegram send wrapper
+│   └── google_calendar.py GoogleCalendarTool — multi-calendar reader
 ├── personas/            Personality definitions (markdown)
 ├── data/                Per-persona databases + shared user context (gitignored)
 ├── debug/               Prompt dumps from debug mode (gitignored)
 ├── tests/               Test suite
+├── google_client_secret.json  Google OAuth client secret (gitignored)
 ├── purcival@.service    Systemd template for background services
 ├── requirements.txt     Python dependencies
 ├── .env.example         Configuration template
@@ -408,9 +444,15 @@ TELEGRAM_TOKEN_JO=
 - [x] Action validation — 7-check code-level gate, budget enforcement
 - [x] Narrative state — LLM maintains prose understanding across cycles
 - [x] Reasoning log — full traces for debugging (7-day retention)
-- [x] User message plan updates — <schedule_updates> tag system
+- [x] User message plan updates — <schedule_updates> in both terminal and Telegram
 - [x] Chat ID persistence — survives service restarts
-- [ ] Google Calendar integration (read-only)
+- [x] /schedule preserves targeted wake-ups
+- [x] Time awareness — agent knows current time and trigger fire time
+- [x] Google Calendar integration (read-only, multi-calendar)
+- [x] Calendar event diffing — new, changed, cancelled, imminent detection
+- [x] Calendar error resilience — consecutive failure tracking with user notification
+- [x] All-day event support — shown separately, no imminent logic
+- [x] Calendar list caching with 24-hour TTL
 - [ ] Gmail integration (read-only)
 - [ ] Execute-tier approval flow via Telegram
 - [ ] Large local model for async agent reasoning
@@ -422,4 +464,6 @@ TELEGRAM_TOKEN_JO=
 - For local inference: Ollama + a GPU (tested on RTX 3060 12GB)
 - For embeddings: `ollama pull nomic-embed-text`
 - For Claude: an Anthropic API key with credits
+- For Google Calendar: Google Cloud project with Calendar API enabled
+  (see GOOGLE_CALENDAR_SETUP.md)
 - Telegram account and bot tokens from @BotFather

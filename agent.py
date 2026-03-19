@@ -647,6 +647,36 @@ def _validate_schedule_change(
     return True, "ok"
 
 
+# --- Tool Context Caching ---
+
+# Tools whose context should NOT be cached for conversations.
+# Schedule context is already shown via _load_scheduled_plan().
+_CACHE_EXCLUDE_TOOLS = {"schedule"}
+
+
+def _cache_tool_contexts(memory: PersonaMemory, tool_contexts: dict[str, str]):
+    """
+    Cache tool contexts in tool_state so they're available in
+    user conversations (Telegram and terminal).
+
+    Called after the perception step of each agent cycle. The cached
+    contexts are read by context.py's _load_tool_contexts() when
+    assembling prompts for user messages.
+
+    Each tool's context is stored under the key "cached_context"
+    with a corresponding "cached_context_at" timestamp. The timestamp
+    lets context.py judge freshness and filter out past events.
+    """
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    for tool_name, context in tool_contexts.items():
+        if tool_name in _CACHE_EXCLUDE_TOOLS:
+            continue
+        memory.set_tool_state(tool_name, "cached_context", context)
+        memory.set_tool_state(tool_name, "cached_context_at", now)
+        logger.debug(f"Cached context for tool '{tool_name}' ({len(context)} chars)")
+
+
 # --- The Agent Cycle ---
 
 async def run_agent_cycle(
@@ -731,6 +761,12 @@ async def run_agent_cycle(
                         tool_contexts[name] = ctx
                 except Exception as e:
                     logger.error(f"Tool '{name}' get_context() failed: {e}")
+
+    # Cache tool contexts so they're available in user conversations.
+    # Each tool's context is stored in tool_state with a timestamp.
+    # context.py reads these cached values when assembling prompts
+    # for user messages (Telegram and terminal).
+    _cache_tool_contexts(memory, tool_contexts)
 
     # Always get the schedule plan (it's always relevant)
     if "schedule" in tools:

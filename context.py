@@ -13,15 +13,15 @@ The system prompt is assembled from sections, each with a token budget:
     3. Current session         (< 500 tokens)    — time, device type
     4. Scheduled plan          (< 2,000 tokens)  — agent's upcoming wake-ups (Stage 5)
     5. Conversation summaries  (< 8,000 tokens)  — retrieved by semantic similarity
-    6. Additional context      (< 8,000 tokens)  — calendar, email, etc. (future)
+    6. Tool context            (< 8,000 tokens)  — cached calendar, email, etc.
 
 The messages array contains recent verbatim messages (< 8,000 tokens).
 
-Stage 5 addition: The scheduled plan section shows the agent's upcoming
-wake-ups in user conversations. This lets the LLM notice when a user's
-message conflicts with the plan and include <schedule_updates> tags in
-its response. The telegram_bot.py response handler strips these tags
-before sending to the user.
+Tool contexts are cached by the agent cycle (see agent.py) and read
+from the database here. Past events are filtered out at read time so
+the LLM only sees upcoming/relevant data. A "last updated" timestamp
+is included so the LLM can judge freshness and request a refresh if
+needed.
 
 To add a new context source in the future:
     1. Write a function that returns a string (the content) or empty string
@@ -32,7 +32,7 @@ To add a new context source in the future:
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from memory import PersonaMemory
 from tokens import get_token_count
@@ -260,20 +260,234 @@ def _load_summaries(memory: PersonaMemory, current_message: str) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _load_additional_context() -> str:
+def _load_tool_contexts(memory: PersonaMemory) -> str:
     """
-    Load additional context from external sources.
+    Load cached tool contexts for inclusion in user conversations.
 
-    Placeholder for future integrations:
-        - Google Calendar (upcoming events, today's schedule)
-        - Gmail (recent important emails)
-        - Other tools
+    Tool contexts are cached by the agent cycle after each perception
+    step (see agent.py's _cache_tool_contexts). This function reads
+    those cached values, filters out past events, and formats them
+    for the system prompt.
 
-    Each integration will be its own module that returns a
-    formatted string. This function will call them and combine
-    the results.
+    This function never calls an API. It only reads from the database.
+    The agent cycle is responsible for refreshing the cache.
+
+    Filtering logic:
+        - Events that have already ended are stripped from the context
+        - The "last updated" timestamp is included so the LLM knows
+          how fresh the data is and can request a refresh if needed
+        - If all events in a cached context have passed, the entire
+          tool context is omitted
+
+    Returns:
+        Formatted string of tool contexts, or empty string if no
+        cached data exists.
     """
-    return ""
+    # Discover which tools have cached context
+    # We look for the standard key pattern: "cached_context" + "cached_context_at"
+    tool_names = _get_cached_tool_names(memory)
+
+    if not tool_names:
+        return ""
+
+    now = datetime.now()
+    sections = []
+
+    for tool_name in tool_names:
+        cached = memory.get_tool_state(tool_name, "cached_context")
+        cached_at = memory.get_tool_state(tool_name, "cached_context_at")
+
+        if not cached:
+            continue
+
+        # Filter out past events from the cached context
+        filtered = _filter_past_events(cached, now)
+        if not filtered or not filtered.strip():
+            continue
+
+        # Format the freshness note
+        freshness = ""
+        if cached_at:
+            try:
+                cached_dt = datetime.strptime(cached_at, "%Y-%m-%d %H:%M:%S")
+                age_minutes = int((now - cached_dt).total_seconds() / 60)
+                if age_minutes < 2:
+                    freshness = "(just updated)"
+                elif age_minutes < 60:
+                    freshness = f"(updated {age_minutes} minutes ago)"
+                elif age_minutes < 1440:
+                    hours = age_minutes // 60
+                    freshness = f"(updated {hours} hour{'s' if hours != 1 else ''} ago)"
+                else:
+                    freshness = f"(updated at {cached_at})"
+            except ValueError:
+                freshness = f"(updated at {cached_at})"
+
+        display_name = tool_name.upper().replace("_", " ")
+        sections.append(f"### {display_name} {freshness}\n{filtered}")
+
+    if not sections:
+        return ""
+
+    return "\n\n".join(sections)
+
+
+def _get_cached_tool_names(memory: PersonaMemory) -> list[str]:
+    """
+    Discover which tools have cached contexts in tool_state.
+
+    Queries tool_state for all keys matching "cached_context" and
+    returns the corresponding tool names.
+    """
+    conn = memory._connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT tool_name FROM tool_state
+            WHERE key = 'cached_context'
+            """
+        ).fetchall()
+        return [row["tool_name"] for row in rows]
+    finally:
+        conn.close()
+
+
+def _filter_past_events(context: str, now: datetime) -> str:
+    """
+    Filter a cached tool context to remove events that have already ended.
+
+    Parses time references in the formatted context lines. Lines that
+    reference times in the past (relative to now) are removed. Lines
+    that can't be parsed (headers, non-time content) are preserved.
+
+    This handles the format produced by GoogleCalendarTool.get_context():
+        IMMINENT: "Meeting" starts in 5 minutes
+        ALL DAY:
+          Mom's Birthday [Personal]
+        UPCOMING:
+          10:00 AM – 11:00 AM  "Meeting" (Room 204) [School]
+          2:00 PM – 3:00 PM   "Dentist" [Personal]
+        NEW: "Event" added for 3:00 PM [Personal]
+        CHANGED: "Event" — time changed [Personal]
+        CANCELLED: "Event" [Personal]
+    """
+    if not context:
+        return ""
+
+    lines = context.split("\n")
+    filtered_lines = []
+    in_upcoming_section = False
+    in_allday_section = False
+    today = now.date()
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Track which section we're in
+        if stripped.startswith("UPCOMING"):
+            in_upcoming_section = True
+            in_allday_section = False
+            filtered_lines.append(line)
+            continue
+        elif stripped.startswith("ALL DAY"):
+            in_allday_section = True
+            in_upcoming_section = False
+            filtered_lines.append(line)
+            continue
+        elif stripped.startswith(("IMMINENT", "NEW", "CHANGED", "CANCELLED")):
+            in_upcoming_section = False
+            in_allday_section = False
+            # IMMINENT events from a past cache are definitely stale
+            if stripped.startswith("IMMINENT"):
+                continue
+            # NEW/CHANGED/CANCELLED are informational diffs — include
+            # them only if they seem to reference future events, but
+            # since we can't easily parse their times, include them.
+            # They'll naturally disappear on the next cache refresh.
+            filtered_lines.append(line)
+            continue
+
+        # All-day events are always relevant for today
+        if in_allday_section and stripped:
+            filtered_lines.append(line)
+            continue
+
+        # For UPCOMING events, try to parse the end time
+        if in_upcoming_section and stripped:
+            end_time = _extract_end_time(stripped, now)
+            if end_time is not None:
+                if end_time <= now:
+                    continue  # Event has ended — skip it
+            # Either still upcoming or couldn't parse — keep it
+            filtered_lines.append(line)
+            continue
+
+        # Non-section content (blank lines, etc.) — keep
+        filtered_lines.append(line)
+
+    # Clean up: remove section headers with no content after them
+    result = "\n".join(filtered_lines)
+
+    # Remove empty UPCOMING section
+    result = result.replace("UPCOMING:\n\n", "").replace("UPCOMING:\n", "")
+    if result.strip() == "UPCOMING:":
+        return ""
+
+    return result.strip()
+
+
+def _extract_end_time(line: str, now: datetime) -> datetime | None:
+    """
+    Try to extract the end time from an UPCOMING event line.
+
+    Expected format:
+        10:00 AM – 11:00 AM  "Meeting" (Room 204) [School]
+        2:00 PM – 3:00 PM   "Dentist" [Personal]
+        Mon 03/20 10:00 AM – 11:00 AM  "Meeting" [School]
+
+    Returns a datetime for the end time, or None if parsing fails.
+
+    Handles midnight wrapping: if the parsed end time appears to be
+    in the past but the start time is also in the past and earlier
+    than the end time, the event genuinely ended. But if the end time
+    is an early AM time (e.g., 1:00 AM) and now is PM, the event
+    likely wraps past midnight — assume it's tomorrow and keep it.
+    """
+    import re
+
+    # Look for time range pattern: HH:MM AM/PM – HH:MM AM/PM
+    pattern = r'(\d{1,2}:\d{2}\s*[AP]M)\s*[–\-]\s*(\d{1,2}:\d{2}\s*[AP]M)'
+    match = re.search(pattern, line, re.IGNORECASE)
+    if not match:
+        return None
+
+    start_time_str = match.group(1).strip()
+    end_time_str = match.group(2).strip()
+    today = now.date()
+
+    try:
+        start_parsed = datetime.strptime(start_time_str, "%I:%M %p")
+        end_parsed = datetime.strptime(end_time_str, "%I:%M %p")
+
+        start_dt = datetime(
+            today.year, today.month, today.day,
+            start_parsed.hour, start_parsed.minute,
+        )
+        end_dt = datetime(
+            today.year, today.month, today.day,
+            end_parsed.hour, end_parsed.minute,
+        )
+
+        # If end time is before start time, the event wraps past
+        # midnight. Push end time to tomorrow.
+        if end_dt <= start_dt:
+            end_dt = end_dt.replace(
+                year=today.year, month=today.month, day=today.day
+            ) + timedelta(days=1)
+
+        return end_dt
+    except ValueError:
+        return None
 
 
 # --- Truncation ---
@@ -324,7 +538,7 @@ def _build_system_prompt(
         ("CURRENT SESSION", _load_session_context(device), 500),
         ("YOUR SCHEDULED PLAN", _load_scheduled_plan(memory), BUDGET_SCHEDULED_PLAN),
         ("RELEVANT PAST CONVERSATIONS", _load_summaries(memory, current_message), BUDGET_SUMMARIES),
-        ("ADDITIONAL CONTEXT", _load_additional_context(), BUDGET_ADDITIONAL),
+        ("TOOL CONTEXT", _load_tool_contexts(memory), BUDGET_ADDITIONAL),
     ]
 
     parts = []
