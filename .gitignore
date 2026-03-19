@@ -20,3 +20,7 @@ debug/
 
 # OS files
 .DS_Store
+
+# Google OAuth credentials (NEVER commit these)
+google_client_secret.json
+data/*/google_credentials.json

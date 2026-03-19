@@ -12,3 +12,8 @@ numpy>=1.24.0
 
 # Stage 4: Proactive messaging
 apscheduler>=3.10.0
+
+# Stage 5: Google Calendar integration
+google-api-python-client>=2.0.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.2.0
