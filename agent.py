@@ -65,6 +65,96 @@ KNOWN_TOOL_NAMES = {"schedule", "telegram", "google_calendar"}
 
 # --- Response Parsing ---
 
+def _rejoin_multiline_calls(text: str) -> list[str]:
+    """
+    Split a text block into individual tool/schedule calls, handling
+    multiline string arguments.
+
+    The LLM sometimes writes action calls with literal newlines inside
+    quoted strings:
+        telegram.send_message(text="Hello!
+        How are you?
+        Good to see you.")
+
+    A naive split on '\\n' would break this into fragments that fail
+    to parse. This function tracks quote depth and parenthesis depth
+    to reassemble complete calls.
+
+    A call starts with a pattern like 'word.word(' and ends when
+    all parentheses are balanced and we're not inside a quoted string.
+
+    Returns a list of complete call strings (or standalone lines).
+    """
+    if not text or text.strip().lower() == "none":
+        return []
+
+    lines = text.split("\n")
+    result = []
+    current_call = []
+    paren_depth = 0
+    in_quote = False
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        if not current_call:
+            # Not currently accumulating a multiline call.
+            if re.match(r'^\w+\.\w+\(', stripped):
+                current_call.append(stripped)
+                paren_depth, in_quote = _scan_depth(stripped, 0, False)
+                if paren_depth == 0 and not in_quote:
+                    result.append("\n".join(current_call))
+                    current_call = []
+            elif stripped.lower() != "none":
+                result.append(stripped)
+        else:
+            # Accumulating a multiline call
+            current_call.append(line)
+            paren_depth, in_quote = _scan_depth(
+                stripped, paren_depth, in_quote
+            )
+            if paren_depth <= 0 and not in_quote:
+                result.append("\n".join(current_call))
+                current_call = []
+                paren_depth = 0
+                in_quote = False
+
+    # If we have an unclosed call, include it anyway
+    if current_call:
+        result.append("\n".join(current_call))
+
+    return result
+
+
+def _scan_depth(
+    line: str, paren_depth: int, in_quote: bool
+) -> tuple[int, bool]:
+    """
+    Scan a line updating parenthesis depth and quote state.
+
+    Carries state from previous lines so multiline quoted strings
+    are tracked correctly. Handles escaped quotes.
+
+    Returns (new_paren_depth, new_in_quote).
+    """
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if ch == '\\' and i + 1 < len(line):
+            i += 2  # Skip escaped character
+            continue
+        if ch == '"':
+            in_quote = not in_quote
+        elif not in_quote:
+            if ch == '(':
+                paren_depth += 1
+            elif ch == ')':
+                paren_depth -= 1
+        i += 1
+    return paren_depth, in_quote
+
 def _extract_tag(text: str, tag: str) -> str | None:
     """
     Extract content between XML-style tags from the LLM response.
@@ -881,19 +971,16 @@ async def run_agent_cycle(
 
     logger.info(f"Cycle {cycle_id}: reasoning complete, parsing actions")
 
-    # Parse actions
-    action_lines = [
-        line for line in actions_text.split("\n")
-        if line.strip() and line.strip().lower() != "none"
-    ]
+    # Parse actions — rejoin multiline calls before parsing.
+    # The LLM sometimes puts newlines inside string arguments
+    # (e.g., a Telegram message with line breaks). We need to
+    # reassemble these into complete tool.method(...) calls.
+    action_lines = _rejoin_multiline_calls(actions_text)
     parsed_actions = [_parse_action_line(line) for line in action_lines]
     parsed_actions = [a for a in parsed_actions if a is not None]
 
-    # Parse schedule changes
-    schedule_lines = [
-        line for line in schedule_text.split("\n")
-        if line.strip() and line.strip().lower() != "none"
-    ]
+    # Parse schedule changes (same treatment for safety)
+    schedule_lines = _rejoin_multiline_calls(schedule_text)
     parsed_schedule = [_parse_schedule_line(line) for line in schedule_lines]
     parsed_schedule = [s for s in parsed_schedule if s is not None]
 
