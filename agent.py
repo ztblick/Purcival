@@ -1,7 +1,7 @@
 """
 Agent cycle — the self-scheduling agent loop.
 
-This module implements the 9-step cycle that runs whenever a scheduled
+This module implements the agent cycle that runs whenever a scheduled
 trigger fires. It replaces the old _process_trigger function in
 proactive.py.
 
@@ -11,15 +11,20 @@ The cycle:
     2. Perceive (run tools, no LLM)
     3. Check pending proposals
     4. Reason (LLM call — always)
-    5. Validate + Act
-    6. Apply schedule changes
-    7. Update state
-    8. Safety net
-    9. Done
+    5. Validate + Act (all tool calls, including schedule)
+    6. Update state
+    7. Safety net
+    8. Done
 
-The agent manages its own schedule — it decides when to wake up next
-and writes itself notes about what to do. Discovery of new information
-happens through planning cycles that scan all tools.
+All tool calls — including schedule management — use a unified JSON
+format in the <actions> tag. There is no separate <schedule> tag.
+Schedule operations are just tool calls to the "schedule" tool, validated
+and executed through the same pipeline as every other tool.
+
+The LLM outputs three sections:
+    <reasoning>  — freeform text (LLM thinking, not parsed by code)
+    <actions>    — JSON array of tool calls (parsed and validated by code)
+    <narrative_state> — freeform text (LLM state for next cycle)
 """
 
 import json
@@ -38,129 +43,17 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 
-# Provider for the agent's reasoning calls. Claude for quality and
-# reliable structured output. Swap to "ollama" for local experiments.
 AGENT_REASONING_PROVIDER = "claude"
-
-# Token budget for agent reasoning responses. Higher than the default
-# 2048 for conversations because agent responses contain four structured
-# sections (reasoning, actions, schedule, narrative_state). Planning
-# cycles with rich calendar data need room for the LLM to think AND
-# output all four sections.
 AGENT_REASONING_MAX_TOKENS = 4096
-
-# Maximum retries for a failed planning cycle before notifying the user.
-# A planning cycle "fails" if the LLM response is truncated (missing
-# required tags). After this many consecutive failures, the agent sends
-# a Telegram notification and stops retrying until the next day.
 PLANNING_CYCLE_MAX_RETRIES = 3
 
-# All tool names that exist in the system, even if not instantiated
-# in the current process. Used by apply_schedule_updates to validate
-# tool names in scheduled wake-ups. The CLI doesn't have TelegramTool
-# (no send_fn) but should still allow scheduling wake-ups that use it.
-# Add new tool names here when creating new tools.
-KNOWN_TOOL_NAMES = {"schedule", "telegram", "google_calendar"}
 
-
-# --- Response Parsing ---
-
-def _rejoin_multiline_calls(text: str) -> list[str]:
-    """
-    Split a text block into individual tool/schedule calls, handling
-    multiline string arguments.
-
-    The LLM sometimes writes action calls with literal newlines inside
-    quoted strings:
-        telegram.send_message(text="Hello!
-        How are you?
-        Good to see you.")
-
-    A naive split on '\\n' would break this into fragments that fail
-    to parse. This function tracks quote depth and parenthesis depth
-    to reassemble complete calls.
-
-    A call starts with a pattern like 'word.word(' and ends when
-    all parentheses are balanced and we're not inside a quoted string.
-
-    Returns a list of complete call strings (or standalone lines).
-    """
-    if not text or text.strip().lower() == "none":
-        return []
-
-    lines = text.split("\n")
-    result = []
-    current_call = []
-    paren_depth = 0
-    in_quote = False
-
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-
-        if not current_call:
-            # Not currently accumulating a multiline call.
-            if re.match(r'^\w+\.\w+\(', stripped):
-                current_call.append(stripped)
-                paren_depth, in_quote = _scan_depth(stripped, 0, False)
-                if paren_depth == 0 and not in_quote:
-                    result.append("\n".join(current_call))
-                    current_call = []
-            elif stripped.lower() != "none":
-                result.append(stripped)
-        else:
-            # Accumulating a multiline call
-            current_call.append(line)
-            paren_depth, in_quote = _scan_depth(
-                stripped, paren_depth, in_quote
-            )
-            if paren_depth <= 0 and not in_quote:
-                result.append("\n".join(current_call))
-                current_call = []
-                paren_depth = 0
-                in_quote = False
-
-    # If we have an unclosed call, include it anyway
-    if current_call:
-        result.append("\n".join(current_call))
-
-    return result
-
-
-def _scan_depth(
-    line: str, paren_depth: int, in_quote: bool
-) -> tuple[int, bool]:
-    """
-    Scan a line updating parenthesis depth and quote state.
-
-    Carries state from previous lines so multiline quoted strings
-    are tracked correctly. Handles escaped quotes.
-
-    Returns (new_paren_depth, new_in_quote).
-    """
-    i = 0
-    while i < len(line):
-        ch = line[i]
-        if ch == '\\' and i + 1 < len(line):
-            i += 2  # Skip escaped character
-            continue
-        if ch == '"':
-            in_quote = not in_quote
-        elif not in_quote:
-            if ch == '(':
-                paren_depth += 1
-            elif ch == ')':
-                paren_depth -= 1
-        i += 1
-    return paren_depth, in_quote
+# --- JSON Response Parsing ---
 
 def _extract_tag(text: str, tag: str) -> str | None:
     """
     Extract content between XML-style tags from the LLM response.
-
-    Returns None if the tag is not found. Returns empty string if
-    the tag is present but empty.
+    Returns None if the tag is not found.
     """
     pattern = rf"<{tag}>(.*?)</{tag}>"
     match = re.search(pattern, text, re.DOTALL)
@@ -169,289 +62,54 @@ def _extract_tag(text: str, tag: str) -> str | None:
     return None
 
 
-def _parse_action_line(line: str) -> dict | None:
+def _parse_actions_json(text: str) -> tuple[list[dict], str | None]:
     """
-    Parse a single action line like:
-        telegram.send_message(text="Hello world")
-        telegram.send_message("Hello world")
+    Parse the <actions> tag content as a JSON array of tool calls.
 
-    Handles both keyword and positional arguments.
+    Expected format:
+        [
+          {"tool": "telegram", "method": "send_message", "parameters": {"text": "Hello"}},
+          {"tool": "schedule", "method": "add_wakeup", "parameters": {"time": "...", "purpose": "...", "tools": []}}
+        ]
 
-    Returns a dict with 'tool', 'method', and 'kwargs', or None
-    if parsing fails.
+    Returns (parsed_actions, error_message).
+    If parsing succeeds, error_message is None.
+    If parsing fails, parsed_actions is [] and error_message describes the problem.
     """
-    line = line.strip()
-    if not line or line.lower() == "none":
-        return None
+    if not text or text.strip() == "[]":
+        return [], None
 
-    # Match: tool_name.method_name(...)
-    match = re.match(r'^(\w+)\.(\w+)\((.*)\)$', line, re.DOTALL)
-    if not match:
-        logger.warning(f"Failed to parse action line: {line[:100]}")
-        return None
-
-    tool_name = match.group(1)
-    method_name = match.group(2)
-    args_str = match.group(3).strip()
-
-    # First try keyword parsing
-    kwargs = _parse_kwargs(args_str)
-
-    # If keyword parsing found nothing but there's content, try positional.
-    # Extract positional args and store them in order — the agent loop
-    # will map them to parameter names using the tool's method schema.
-    if not kwargs and args_str:
-        positional = _split_positional_args(args_str)
-        if positional:
-            kwargs = {"_positional": [_unquote(a) for a in positional]}
-
-    return {
-        "tool": tool_name,
-        "method": method_name,
-        "kwargs": kwargs,
-        "raw": line,
-    }
-
-
-def _parse_kwargs(args_str: str) -> dict:
-    """
-    Parse keyword arguments from a string like:
-        text="Hello world", count=5
-
-    Handles quoted strings (with escaped quotes), numbers, booleans,
-    and simple lists. Returns a dict of parsed values.
-    """
-    if not args_str:
-        return {}
-
-    kwargs = {}
-    # Use a state machine to handle quoted strings properly
-    i = 0
-    while i < len(args_str):
-        # Skip whitespace and commas
-        while i < len(args_str) and args_str[i] in ' ,\n\t':
-            i += 1
-        if i >= len(args_str):
-            break
-
-        # Find key — accept both "key=" and "key:" syntax
-        key_match = re.match(r'(\w+)\s*[:=]\s*', args_str[i:])
-        if not key_match:
-            break
-        key = key_match.group(1)
-        i += key_match.end()
-
-        # Find value
-        if i >= len(args_str):
-            break
-
-        if args_str[i] == '"':
-            # Quoted string — find the matching close quote
-            i += 1  # skip opening quote
-            value_chars = []
-            while i < len(args_str):
-                if args_str[i] == '\\' and i + 1 < len(args_str):
-                    next_ch = args_str[i + 1]
-                    # Convert escape sequences
-                    if next_ch == 'n':
-                        value_chars.append('\n')
-                    elif next_ch == 't':
-                        value_chars.append('\t')
-                    else:
-                        value_chars.append(next_ch)
-                    i += 2
-                elif args_str[i] == '"':
-                    i += 1  # skip closing quote
-                    break
-                else:
-                    value_chars.append(args_str[i])
-                    i += 1
-            kwargs[key] = ''.join(value_chars)
-
-        elif args_str[i] == '[':
-            # List — find matching bracket
-            bracket_depth = 1
-            start = i
-            i += 1
-            while i < len(args_str) and bracket_depth > 0:
-                if args_str[i] == '[':
-                    bracket_depth += 1
-                elif args_str[i] == ']':
-                    bracket_depth -= 1
-                i += 1
-            try:
-                kwargs[key] = json.loads(args_str[start:i])
-            except json.JSONDecodeError:
-                kwargs[key] = args_str[start:i]
-
-        else:
-            # Unquoted value — read until comma or end
-            value_match = re.match(r'([^,\)]+)', args_str[i:])
-            if value_match:
-                raw_value = value_match.group(1).strip()
-                i += value_match.end()
-                # Try to parse as number or boolean
-                if raw_value.lower() == 'true':
-                    kwargs[key] = True
-                elif raw_value.lower() == 'false':
-                    kwargs[key] = False
-                else:
-                    try:
-                        kwargs[key] = int(raw_value)
-                    except ValueError:
-                        try:
-                            kwargs[key] = float(raw_value)
-                        except ValueError:
-                            kwargs[key] = raw_value
-
-    return kwargs
-
-
-def _parse_schedule_line(line: str) -> dict | None:
-    """
-    Parse a schedule command line. Handles both keyword and positional args:
-        schedule.add_wakeup(time="2026-03-16 09:52", purpose="...", tools=["calendar"])
-        schedule.add_wakeup("2026-03-16 09:52", "...", ["calendar"])
-
-    Returns a dict with 'method' and 'kwargs', or None if parsing fails.
-    """
-    line = line.strip()
-    if not line or line.lower() == "none":
-        return None
-
-    # Match: schedule.method_name(...)
-    match = re.match(r'^schedule\.(\w+)\((.*)\)$', line, re.DOTALL)
-    if not match:
-        logger.warning(f"Failed to parse schedule line: {line[:100]}")
-        return None
-
-    method_name = match.group(1)
-    args_str = match.group(2).strip()
-
-    # First try keyword parsing
-    kwargs = _parse_kwargs(args_str)
-
-    # If keyword parsing found nothing useful, try positional parsing.
-    # The LLM often outputs positional args like:
-    #   schedule.add_wakeup("2026-03-17 15:30", "purpose text", ["telegram"])
-    if not kwargs and args_str:
-        kwargs = _parse_positional_schedule_args(method_name, args_str)
-
-    return {
-        "method": method_name,
-        "kwargs": kwargs,
-        "raw": line,
-    }
-
-
-def _parse_positional_schedule_args(method_name: str, args_str: str) -> dict:
-    """
-    Parse positional arguments for schedule methods.
-
-    Known signatures:
-        add_wakeup(time, purpose, tools)
-        modify_wakeup(id, time?, purpose?, tools?)
-        cancel_wakeup(id)
-    """
-    # Extract all top-level arguments by tracking quote/bracket depth
-    args = _split_positional_args(args_str)
-
-    if method_name == "add_wakeup" and len(args) >= 2:
-        kwargs = {
-            "time": _unquote(args[0]),
-            "purpose": _unquote(args[1]),
-        }
-        if len(args) >= 3:
-            try:
-                kwargs["tools"] = json.loads(args[2])
-            except (json.JSONDecodeError, TypeError):
-                kwargs["tools"] = []
-        return kwargs
-
-    elif method_name == "modify_wakeup" and len(args) >= 1:
-        kwargs = {"id": _try_int(_unquote(args[0]))}
-        if len(args) >= 2:
-            kwargs["time"] = _unquote(args[1])
-        if len(args) >= 3:
-            kwargs["purpose"] = _unquote(args[2])
-        if len(args) >= 4:
-            try:
-                kwargs["tools"] = json.loads(args[3])
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return kwargs
-
-    elif method_name == "cancel_wakeup" and len(args) >= 1:
-        return {"id": _try_int(_unquote(args[0]))}
-
-    return {}
-
-
-def _split_positional_args(args_str: str) -> list[str]:
-    """
-    Split a positional argument string respecting quotes and brackets.
-    Returns a list of raw argument strings.
-    """
-    args = []
-    current = []
-    depth = 0  # bracket depth
-    in_quote = False
-    escape_next = False
-
-    for ch in args_str:
-        if escape_next:
-            current.append(ch)
-            escape_next = False
-            continue
-        if ch == '\\':
-            escape_next = True
-            current.append(ch)
-            continue
-        if ch == '"' and depth == 0:
-            in_quote = not in_quote
-            current.append(ch)
-            continue
-        if ch in '([':
-            depth += 1
-            current.append(ch)
-            continue
-        if ch in ')]':
-            depth -= 1
-            current.append(ch)
-            continue
-        if ch == ',' and not in_quote and depth == 0:
-            args.append(''.join(current).strip())
-            current = []
-            continue
-        current.append(ch)
-
-    if current:
-        args.append(''.join(current).strip())
-
-    return [a for a in args if a]
-
-
-def _unquote(s: str) -> str:
-    """Remove surrounding quotes and process escape sequences."""
-    s = s.strip()
-    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
-        s = s[1:-1]
-    elif len(s) >= 2 and s[0] == "'" and s[-1] == "'":
-        s = s[1:-1]
-    # Process common escape sequences
-    s = s.replace("\\n", "\n")
-    s = s.replace("\\t", "\t")
-    s = s.replace('\\"', '"')
-    s = s.replace("\\'", "'")
-    return s
-
-
-def _try_int(s: str) -> int | str:
-    """Try to convert to int, return as-is if it fails."""
+    # Try to parse as JSON
     try:
-        return int(s)
-    except (ValueError, TypeError):
-        return s
+        actions = json.loads(text)
+    except json.JSONDecodeError as e:
+        return [], f"JSON parse error in <actions>: {e}"
+
+    if not isinstance(actions, list):
+        return [], f"<actions> must be a JSON array, got {type(actions).__name__}"
+
+    # Validate each action has required fields
+    validated = []
+    errors = []
+    for i, action in enumerate(actions):
+        if not isinstance(action, dict):
+            errors.append(f"Action {i}: expected object, got {type(action).__name__}")
+            continue
+        if "tool" not in action:
+            errors.append(f"Action {i}: missing 'tool' field")
+            continue
+        if "method" not in action:
+            errors.append(f"Action {i}: missing 'method' field")
+            continue
+        validated.append({
+            "tool": str(action["tool"]),
+            "method": str(action["method"]),
+            "parameters": action.get("parameters", {}),
+        })
+
+    if errors:
+        return validated, "; ".join(errors)
+    return validated, None
 
 
 # --- Prompt Assembly ---
@@ -470,10 +128,6 @@ def _build_agent_prompt(
 ) -> str:
     """
     Assemble the full system prompt for the agent reasoning call.
-
-    This is similar to context.py's _build_system_prompt but includes
-    agent-specific sections: trigger purpose, tool perceptions, the
-    scheduled plan, and available actions.
     """
     from context import _load_user_context, _truncate_to_budget, BUDGET_USER_CONTEXT
 
@@ -502,18 +156,14 @@ def _build_agent_prompt(
             "This is your first cycle. You have no previous state."
         )
 
-    # 5. Why the agent is awake — now includes the scheduled time
+    # 5. Why the agent is awake
     wake_section = trigger_purpose
     if trigger_time:
         try:
             fire_dt = datetime.strptime(trigger_time, "%Y-%m-%d %H:%M:%S")
             formatted_time = fire_dt.strftime("%I:%M %p").lstrip("0")
-            wake_section = (
-                f"Scheduled wake-up time: {formatted_time}\n\n"
-                f"{trigger_purpose}"
-            )
+            wake_section = f"Scheduled wake-up time: {formatted_time}\n\n{trigger_purpose}"
         except ValueError:
-            # Unparseable time — just use the purpose
             pass
     sections.append(f"## WHY YOU ARE AWAKE\n\n{wake_section}")
 
@@ -522,17 +172,14 @@ def _build_agent_prompt(
         perception_parts = []
         for tool_name, context in tool_contexts.items():
             perception_parts.append(f"### {tool_name.upper()}\n{context}")
-        sections.append(
-            "## WHAT YOU PERCEIVE\n\n" + "\n\n".join(perception_parts)
-        )
+        sections.append("## WHAT YOU PERCEIVE\n\n" + "\n\n".join(perception_parts))
 
     # 7. Scheduled plan
     if scheduled_plan:
         sections.append(f"## YOUR SCHEDULED PLAN\n\n{scheduled_plan}")
     else:
         sections.append(
-            "## YOUR SCHEDULED PLAN\n\n"
-            "You have no upcoming wake-ups scheduled. "
+            "## YOUR SCHEDULED PLAN\n\nYou have no upcoming wake-ups scheduled. "
             "Consider planning your day."
         )
 
@@ -544,11 +191,9 @@ def _build_agent_prompt(
                 f"  #{p['id']} ({p['created_at']}): "
                 f"{p['tool_name']}.{p['method_name']}({p.get('parameters', '')})"
             )
-        sections.append(
-            "## PENDING PROPOSALS\n\n" + "\n".join(proposal_lines)
-        )
+        sections.append("## PENDING PROPOSALS\n\n" + "\n".join(proposal_lines))
 
-    # 9. Available actions + budget
+    # 9. Available actions + budget + JSON format instructions
     budget_info = ""
     if schedule_config:
         max_actions = schedule_config.get("max_actions_per_day", 25)
@@ -566,14 +211,17 @@ def _build_agent_prompt(
     sections.append(
         f"## AVAILABLE ACTIONS\n\n"
         f"You may take these actions. Choose only what is appropriate.\n"
-        f"If nothing warrants action, respond with \"none\" for actions "
-        f"and \"none\" for schedule.\n\n"
+        f"If nothing warrants action, use an empty array [] for actions.\n\n"
         f"{budget_info}"
         f"{available_actions}\n\n"
-        f"Respond with exactly these four sections:\n"
-        f"<reasoning>Your thinking about what to do and why</reasoning>\n"
-        f"<actions>Tool calls, one per line, or \"none\"</actions>\n"
-        f"<schedule>Schedule changes, one per line, or \"none\"</schedule>\n"
+        f"Respond with exactly these three sections:\n\n"
+        f"<reasoning>Your thinking about what to do and why</reasoning>\n\n"
+        f"<actions>\n"
+        f"A JSON array of tool calls. Each object has \"tool\", \"method\", and \"parameters\".\n"
+        f"Use [] if no actions are needed. Examples:\n"
+        f'[{{"tool": "telegram", "method": "send_message", "parameters": {{"text": "Hello!"}}}},\n'
+        f' {{"tool": "schedule", "method": "add_wakeup", "parameters": {{"time": "2026-03-16 11:05", "purpose": "Check in after meeting", "tools": ["telegram"]}}}}]\n'
+        f"</actions>\n\n"
         f"<narrative_state>Updated summary of your current situation</narrative_state>"
     )
 
@@ -583,48 +231,28 @@ def _build_agent_prompt(
 def _format_available_actions(tools: dict[str, Tool]) -> str:
     """
     Format tool methods into a readable list for the LLM prompt.
-
-    Only includes methods the agent has permission to use.
-    Groups by tool with method descriptions.
+    All tools (including schedule) are listed uniformly.
     """
-    lines = []
+    lines = ["Tools:"]
 
-    # Tool methods
-    tool_lines = []
     for tool_name, tool in tools.items():
-        if tool_name == "schedule":
-            continue  # Schedule methods listed separately
         for method in tool.get_methods():
-            params = ", ".join(
-                f"{k}" for k, v in method.parameters.items()
-                if v.get("required", False)
-            )
+            # Build parameter description
+            param_parts = []
+            for k, v in method.parameters.items():
+                req = " (required)" if v.get("required") else " (optional)"
+                param_parts.append(f"{k}: {v.get('description', '')}{req}")
+            params_str = "; ".join(param_parts) if param_parts else "none"
+
             tier_label = f"[{method.tier}]"
             if method.tier == "execute":
                 tier_label = "[requires approval]"
-            tool_lines.append(
-                f"  - {tool_name}.{method.name}({params}): "
-                f"{method.description} {tier_label}"
+
+            lines.append(
+                f"  - {tool_name}.{method.name}: "
+                f"{method.description} {tier_label}\n"
+                f"    Parameters: {params_str}"
             )
-
-    if tool_lines:
-        lines.append("Tools:")
-        lines.extend(tool_lines)
-
-    # Schedule methods (always available)
-    # Build the list of valid tool names for the hint
-    tool_names = [n for n in tools.keys() if n != "schedule"]
-    tool_names_str = ", ".join(f'"{n}"' for n in tool_names) if tool_names else '"telegram"'
-
-    lines.append("")
-    lines.append("Schedule management (does not count toward action budget):")
-    lines.append(
-        f"  - schedule.add_wakeup(time, purpose, tools): Plan a future wake-up. "
-        f"time is \"YYYY-MM-DD HH:MM\". tools is a list of tool names: [{tool_names_str}]. "
-        f"Use [] for a planning cycle that checks all tools."
-    )
-    lines.append("  - schedule.modify_wakeup(id, time?, purpose?, tools?): Change a plan.")
-    lines.append("  - schedule.cancel_wakeup(id): Remove a planned wake-up.")
 
     return "\n".join(lines)
 
@@ -640,8 +268,12 @@ def _validate_action(
     """
     Validate a parsed action against the code-level gates.
 
-    Returns (is_valid, reason). If is_valid is False, reason explains
-    why. If the action needs approval, returns (False, "needs_approval").
+    Returns (is_valid, reason). If is_valid is False, reason explains why.
+    If the action needs approval, returns (False, "needs_approval").
+
+    This is the GENERIC validation gate. Tool-specific validation
+    (like operating hours for schedule, or email format for gmail)
+    is handled inside each tool's execute() method.
     """
     tool_name = action["tool"]
     method_name = action["method"]
@@ -657,9 +289,8 @@ def _validate_action(
         return False, f"tool '{tool_name}' is disabled"
 
     # 3. Method exists
-    method_list = tool.get_methods()
     method_obj = None
-    for m in method_list:
+    for m in tool.get_methods():
         if m.name == method_name:
             method_obj = m
             break
@@ -678,107 +309,14 @@ def _validate_action(
     return True, "ok"
 
 
-def _validate_schedule_change(
-    change: dict,
-    memory: PersonaMemory,
-    schedule_config: dict | None,
-    registered_tools: set[str],
-) -> tuple[bool, str]:
-    """
-    Validate a parsed schedule change against the code-level gates.
-
-    Returns (is_valid, reason).
-    """
-    method = change["method"]
-    kwargs = change["kwargs"]
-    now = datetime.now()
-
-    if method in ("add_wakeup", "modify_wakeup"):
-        # Check time is provided for add, optional for modify
-        time_str = kwargs.get("time")
-        if method == "add_wakeup" and not time_str:
-            return False, "add_wakeup requires a time"
-
-        if time_str:
-            # Parse and validate time
-            try:
-                normalized = time_str.strip()
-                if len(normalized) == 16:
-                    normalized += ":00"
-                fire_dt = datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                return False, f"invalid time format: {time_str}"
-
-            # Must be in the future
-            if fire_dt <= now:
-                return False, f"time is in the past: {time_str}"
-
-            # Must be within operating hours
-            if schedule_config:
-                start_h, start_m = map(int, schedule_config["start_time"].split(":"))
-                end_h, end_m = map(int, schedule_config["end_time"].split(":"))
-                fire_minutes = fire_dt.hour * 60 + fire_dt.minute
-                start_minutes = start_h * 60 + start_m
-                end_minutes = end_h * 60 + end_m
-                if fire_minutes < start_minutes or fire_minutes > end_minutes:
-                    return False, (
-                        f"time {time_str} is outside operating hours "
-                        f"({schedule_config['start_time']}–{schedule_config['end_time']})"
-                    )
-
-        # Validate and normalize tool names if provided.
-        # The LLM sometimes outputs "telegram.send_message" instead of
-        # just "telegram". We extract the tool name (before the dot).
-        tools_list = kwargs.get("tools", [])
-        if isinstance(tools_list, list):
-            normalized_tools = []
-            for t in tools_list:
-                # Strip method name if present: "telegram.send_message" → "telegram"
-                tool_name = t.split(".")[0] if isinstance(t, str) else t
-                if tool_name not in registered_tools and tool_name not in ("schedule",):
-                    return False, f"unknown tool '{tool_name}' in tools list"
-                normalized_tools.append(tool_name)
-            # Deduplicate
-            kwargs["tools"] = list(dict.fromkeys(normalized_tools))
-
-    if method in ("modify_wakeup", "cancel_wakeup"):
-        trigger_id = kwargs.get("id")
-        if trigger_id is None:
-            return False, f"{method} requires an id"
-        trigger = memory.get_trigger(int(trigger_id))
-        if not trigger:
-            return False, f"trigger #{trigger_id} not found"
-        if trigger.get("fired"):
-            return False, f"trigger #{trigger_id} has already fired"
-
-    if method not in ("add_wakeup", "modify_wakeup", "cancel_wakeup", "get_plan"):
-        return False, f"unknown schedule method '{method}'"
-
-    return True, "ok"
-
-
 # --- Tool Context Caching ---
 
-# Tools whose context should NOT be cached for conversations.
-# Schedule context is already shown via _load_scheduled_plan().
 _CACHE_EXCLUDE_TOOLS = {"schedule"}
 
 
 def _cache_tool_contexts(memory: PersonaMemory, tool_contexts: dict[str, str]):
-    """
-    Cache tool contexts in tool_state so they're available in
-    user conversations (Telegram and terminal).
-
-    Called after the perception step of each agent cycle. The cached
-    contexts are read by context.py's _load_tool_contexts() when
-    assembling prompts for user messages.
-
-    Each tool's context is stored under the key "cached_context"
-    with a corresponding "cached_context_at" timestamp. The timestamp
-    lets context.py judge freshness and filter out past events.
-    """
+    """Cache tool contexts in tool_state for user conversations."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
     for tool_name, context in tool_contexts.items():
         if tool_name in _CACHE_EXCLUDE_TOOLS:
             continue
@@ -799,17 +337,8 @@ async def run_agent_cycle(
     """
     Execute one complete agent cycle.
 
-    This is the function that replaces _process_trigger in proactive.py.
-    It runs the full 9-step cycle: housekeeping, load state, perceive,
-    check proposals, reason, validate + act, apply schedule changes,
-    update state, done.
-
-    Args:
-        trigger: The trigger dict that started this cycle.
-        memory: The persona's memory instance.
-        tools: Dict of tool name → tool instance.
-        persona_prompt: The persona's system prompt text.
-        send_fn: Async function for sending Telegram messages.
+    Runs the full 8-step cycle: housekeeping, load state, perceive,
+    check proposals, reason, validate + act, update state, safety net.
     """
     cycle_id = str(uuid.uuid4())[:8]
     trigger_id = trigger.get("id")
@@ -823,36 +352,23 @@ async def run_agent_cycle(
     memory.cleanup_old_data()
 
     # --- Step 1: Load State ---
-    # Parse trigger context
     trigger_context = _parse_trigger_context(trigger)
     trigger_purpose = trigger_context.get("purpose", "Scheduled check-in")
     trigger_tools = trigger_context.get("tools", [])
     trigger_time = trigger.get("fire_at")
-
-    # Empty tools list = planning cycle (load all tools).
-    # Specific tools list = targeted cycle (load only those).
     is_planning = len(trigger_tools) == 0
 
-    # Read narrative state
     narrative_state = memory.get_narrative()
-
-    # Read schedule config for guardrails
     schedule_config = memory.get_schedule_config()
-
-    # Read pending proposals
     pending_proposals = memory.get_pending_proposals()
-
-    # Count today's actions for budget
     actions_today = memory.get_today_action_count()
-    max_actions = 25  # default
+    max_actions = 25
     if schedule_config:
         max_actions = schedule_config.get("max_actions_per_day", 25)
 
     # --- Step 2: Perceive ---
     tool_contexts = {}
-
     if is_planning:
-        # Planning cycle: run all enabled tools
         for name, tool in tools.items():
             if tool.enabled:
                 try:
@@ -862,7 +378,6 @@ async def run_agent_cycle(
                 except Exception as e:
                     logger.error(f"Tool '{name}' get_context() failed: {e}")
     else:
-        # Targeted cycle: run only the tools listed in the trigger
         for name in trigger_tools:
             if name in tools and tools[name].enabled:
                 try:
@@ -872,28 +387,19 @@ async def run_agent_cycle(
                 except Exception as e:
                     logger.error(f"Tool '{name}' get_context() failed: {e}")
 
-    # Cache tool contexts so they're available in user conversations.
-    # Each tool's context is stored in tool_state with a timestamp.
-    # context.py reads these cached values when assembling prompts
-    # for user messages (Telegram and terminal).
     _cache_tool_contexts(memory, tool_contexts)
 
-    # Always get the schedule plan (it's always relevant)
     if "schedule" in tools:
         schedule_plan = tools["schedule"].get_context()
     else:
         schedule_plan = None
 
     # --- Step 3: Check Proposals ---
-    # TODO: Check if user responded to pending proposals.
-    # This requires scanning recent messages for approval keywords.
-    # Deferred to integration step — for now, proposals just persist.
+    # TODO: Scan recent messages for approval keywords.
 
     # --- Step 4: Reason ---
-    # Build the available actions description
     available_actions = _format_available_actions(tools)
 
-    # Build the full agent prompt
     system_prompt = _build_agent_prompt(
         persona_prompt=persona_prompt,
         narrative_state=narrative_state,
@@ -907,10 +413,7 @@ async def run_agent_cycle(
         actions_today=actions_today,
     )
 
-    # Build the messages array (recent conversation + summaries)
     _, messages = assemble_context(persona_prompt, memory, device=DEVICE_TELEGRAM)
-
-    # Add the agent cycle prompt as the final user message
     messages.append({
         "role": "user",
         "content": f"[Agent cycle: {trigger_purpose}]",
@@ -928,88 +431,57 @@ async def run_agent_cycle(
     except Exception as e:
         logger.error(f"Cycle {cycle_id}: reasoning failed: {e}")
         memory.add_reasoning_log(
-            cycle_id=cycle_id,
-            trigger_id=trigger_id,
-            trigger_purpose=trigger_purpose,
-            narrative_in=narrative_state,
+            cycle_id=cycle_id, trigger_id=trigger_id,
+            trigger_purpose=trigger_purpose, narrative_in=narrative_state,
             tool_contexts=json.dumps(tool_contexts),
-            skipped=True,
-            skip_reason=f"LLM call failed: {e}",
+            skipped=True, skip_reason=f"LLM call failed: {e}",
             provider=AGENT_REASONING_PROVIDER,
         )
         _ensure_future_plan(memory, tools, schedule_config)
-        return False  # Signal failure for retry logic
+        return False
 
     # --- Parse the response ---
     reasoning = _extract_tag(llm_response, "reasoning") or ""
-    actions_text = _extract_tag(llm_response, "actions") or "none"
-    schedule_text = _extract_tag(llm_response, "schedule") or "none"
+    actions_text = _extract_tag(llm_response, "actions") or "[]"
     narrative_out = _extract_tag(llm_response, "narrative_state") or ""
 
-    # Detect truncated responses — if the LLM ran out of tokens, it
-    # won't have produced all four required tags. A response with
-    # reasoning but no actions/schedule/narrative tags is truncated.
+    # Detect truncated responses
     truncated = _is_response_truncated(llm_response)
     if truncated:
         logger.warning(
             f"Cycle {cycle_id}: response appears truncated "
-            f"(missing required tags). Response length: {len(llm_response)} chars"
+            f"(missing required tags). Length: {len(llm_response)} chars"
         )
         memory.add_reasoning_log(
-            cycle_id=cycle_id,
-            trigger_id=trigger_id,
+            cycle_id=cycle_id, trigger_id=trigger_id,
             trigger_purpose=trigger_purpose,
             tool_contexts=json.dumps(tool_contexts) if tool_contexts else None,
-            narrative_in=narrative_state,
-            llm_response=llm_response,
-            skipped=True,
-            skip_reason="Response truncated — missing required tags",
+            narrative_in=narrative_state, llm_response=llm_response,
+            skipped=True, skip_reason="Response truncated — missing required tags",
             provider=AGENT_REASONING_PROVIDER,
         )
         _ensure_future_plan(memory, tools, schedule_config)
-        return False  # Signal failure for retry logic
+        return False
 
-    logger.info(f"Cycle {cycle_id}: reasoning complete, parsing actions")
+    # Parse actions as JSON
+    parsed_actions, parse_error = _parse_actions_json(actions_text)
+    if parse_error:
+        logger.warning(f"Cycle {cycle_id}: action parse warning: {parse_error}")
 
-    # Parse actions — rejoin multiline calls before parsing.
-    # The LLM sometimes puts newlines inside string arguments
-    # (e.g., a Telegram message with line breaks). We need to
-    # reassemble these into complete tool.method(...) calls.
-    action_lines = _rejoin_multiline_calls(actions_text)
-    parsed_actions = [_parse_action_line(line) for line in action_lines]
-    parsed_actions = [a for a in parsed_actions if a is not None]
+    logger.info(
+        f"Cycle {cycle_id}: reasoning complete, "
+        f"{len(parsed_actions)} action(s) to process"
+    )
 
-    # Parse schedule changes (same treatment for safety)
-    schedule_lines = _rejoin_multiline_calls(schedule_text)
-    parsed_schedule = [_parse_schedule_line(line) for line in schedule_lines]
-    parsed_schedule = [s for s in parsed_schedule if s is not None]
-
-    # --- Step 5: Validate + Act ---
+    # --- Step 5: Validate + Act (unified for ALL tools including schedule) ---
     actions_taken = []
 
     for action in parsed_actions:
         valid, reason = _validate_action(action, tools, actions_today, max_actions)
 
         if valid:
-            # Execute the action
             tool = tools[action["tool"]]
-            kwargs = action["kwargs"]
-
-            # Resolve positional args to named kwargs using the method's
-            # parameter schema. The LLM sometimes outputs positional args
-            # instead of keyword args.
-            if "_positional" in kwargs:
-                positional = kwargs.pop("_positional")
-                method_obj = _get_method_obj(tool, action["method"])
-                if method_obj and method_obj.parameters:
-                    param_names = list(method_obj.parameters.keys())
-                    for i, val in enumerate(positional):
-                        if i < len(param_names):
-                            kwargs[param_names[i]] = val
-                elif len(positional) == 1:
-                    # Single positional arg with no schema — try common
-                    # parameter names
-                    kwargs["text"] = positional[0]
+            kwargs = action["parameters"] if isinstance(action.get("parameters"), dict) else {}
 
             try:
                 result = tool.execute(action["method"], **kwargs)
@@ -1018,16 +490,20 @@ async def run_agent_cycle(
                     tool_name=action["tool"],
                     method_name=action["method"],
                     tier=_get_method_tier(tool, action["method"]),
-                    parameters=json.dumps(action["kwargs"]),
+                    parameters=json.dumps(kwargs),
                     result=result,
                     status="completed",
                 )
                 actions_taken.append({
-                    "action": action["raw"],
+                    "tool": action["tool"],
+                    "method": action["method"],
                     "status": "completed",
                     "result": result,
                 })
-                actions_today += 1  # Update running count
+                # Update running budget count for message/draft tiers
+                tier = _get_method_tier(tool, action["method"])
+                if tier in ("message", "draft"):
+                    actions_today += 1
 
                 # Handle async Telegram sends
                 if isinstance(tool, TelegramTool) and send_fn:
@@ -1035,7 +511,6 @@ async def run_agent_cycle(
                     if msg:
                         try:
                             await send_fn(msg)
-                            # Also persist as an assistant message for conversation continuity
                             memory.add_message("assistant", msg)
                             logger.info(f"Cycle {cycle_id}: sent message: {msg[:80]}...")
                         except Exception as e:
@@ -1048,165 +523,96 @@ async def run_agent_cycle(
                     tool_name=action["tool"],
                     method_name=action["method"],
                     tier=_get_method_tier(tools.get(action["tool"]), action["method"]),
-                    parameters=json.dumps(action["kwargs"]),
+                    parameters=json.dumps(kwargs),
                     result=str(e),
                     status="failed",
                 )
                 actions_taken.append({
-                    "action": action["raw"],
+                    "tool": action["tool"],
+                    "method": action["method"],
                     "status": "failed",
                     "reason": str(e),
                 })
 
         elif reason == "needs_approval":
-            # Store as pending proposal
+            kwargs = action.get("parameters", {})
             memory.add_agent_action(
                 cycle_id=cycle_id,
                 tool_name=action["tool"],
                 method_name=action["method"],
                 tier="execute",
-                parameters=json.dumps(action["kwargs"]),
+                parameters=json.dumps(kwargs),
                 status="pending_approval",
             )
             actions_taken.append({
-                "action": action["raw"],
+                "tool": action["tool"],
+                "method": action["method"],
                 "status": "pending_approval",
             })
-            logger.info(f"Cycle {cycle_id}: proposal stored: {action['raw'][:80]}")
+            logger.info(f"Cycle {cycle_id}: proposal stored: {action['tool']}.{action['method']}")
 
         else:
-            # Validation failed
             memory.add_agent_action(
                 cycle_id=cycle_id,
                 tool_name=action.get("tool", "unknown"),
                 method_name=action.get("method", "unknown"),
                 tier="unknown",
-                parameters=json.dumps(action.get("kwargs", {})),
+                parameters=json.dumps(action.get("parameters", {})),
                 result=reason,
                 status="failed",
             )
             actions_taken.append({
-                "action": action["raw"],
+                "tool": action.get("tool", "unknown"),
+                "method": action.get("method", "unknown"),
                 "status": "failed",
                 "reason": reason,
             })
             logger.warning(f"Cycle {cycle_id}: action rejected: {reason}")
 
-    # --- Step 6: Apply Schedule Changes ---
-    schedule_changes_applied = []
-    registered_tool_names = set(tools.keys())
-
-    for change in parsed_schedule:
-        valid, reason = _validate_schedule_change(
-            change, memory, schedule_config, registered_tool_names
-        )
-
-        if valid:
-            schedule_tool = tools.get("schedule")
-            if schedule_tool:
-                try:
-                    result = schedule_tool.execute(change["method"], **change["kwargs"])
-                    schedule_changes_applied.append({
-                        "change": change["raw"],
-                        "status": "applied",
-                        "result": result,
-                    })
-                    logger.info(f"Cycle {cycle_id}: schedule change: {result}")
-                except Exception as e:
-                    schedule_changes_applied.append({
-                        "change": change["raw"],
-                        "status": "failed",
-                        "reason": str(e),
-                    })
-                    logger.error(f"Cycle {cycle_id}: schedule change failed: {e}")
-        else:
-            schedule_changes_applied.append({
-                "change": change["raw"],
-                "status": "rejected",
-                "reason": reason,
-            })
-            logger.warning(
-                f"Cycle {cycle_id}: schedule change rejected: {reason} "
-                f"({change['raw'][:80]})"
-            )
-
-    # --- Step 7: Update State ---
-
-    # Save narrative state (use new if provided, otherwise keep old)
+    # --- Step 6: Update State ---
     if narrative_out:
         memory.set_narrative(narrative_out, cycle_id)
-    elif narrative_state:
-        # LLM didn't produce a new narrative — keep the old one
-        pass
 
-    # Log the full reasoning trace
     memory.add_reasoning_log(
-        cycle_id=cycle_id,
-        trigger_id=trigger_id,
+        cycle_id=cycle_id, trigger_id=trigger_id,
         trigger_purpose=trigger_purpose,
         tool_contexts=json.dumps(tool_contexts) if tool_contexts else None,
-        narrative_in=narrative_state,
-        llm_response=llm_response,
+        narrative_in=narrative_state, llm_response=llm_response,
         actions_taken=json.dumps(actions_taken) if actions_taken else None,
-        schedule_changes=json.dumps(schedule_changes_applied) if schedule_changes_applied else None,
-        narrative_out=narrative_out,
-        skipped=False,
+        narrative_out=narrative_out, skipped=False,
         provider=AGENT_REASONING_PROVIDER,
     )
 
-    # --- Step 8: Ensure future plan exists ---
+    # --- Step 7: Ensure future plan exists ---
     _ensure_future_plan(memory, tools, schedule_config)
 
     logger.info(
-        f"Cycle {cycle_id} complete: "
-        f"{len(actions_taken)} actions, "
-        f"{len(schedule_changes_applied)} schedule changes"
+        f"Cycle {cycle_id} complete: {len(actions_taken)} action(s)"
     )
 
-    return True  # Signal success
+    return True
 
 
 # --- Helper Functions ---
 
 def _is_response_truncated(llm_response: str) -> bool:
     """
-    Detect if an agent reasoning response was truncated by the token limit.
+    Detect if an agent reasoning response was truncated.
 
-    A complete response has all four required tags: reasoning, actions,
-    schedule, and narrative_state. If any of the last three are missing
-    (actions, schedule, narrative_state), the response was likely
-    truncated — the LLM ran out of tokens while still writing.
-
-    We check for the closing tags since the LLM writes them in order.
-    If </actions> is missing, the response was cut off during or before
-    the actions section. If </narrative_state> is missing, it was cut
-    off near the end.
+    A complete response has all three required tags: reasoning, actions,
+    and narrative_state. If actions or narrative_state closing tags are
+    missing, the response was likely truncated.
     """
-    # Must have at least the actions closing tag to be considered complete.
-    # The reasoning tag alone doesn't count — that's where truncation
-    # typically happens (the LLM spends too many tokens thinking).
     has_actions = "</actions>" in llm_response
-    has_schedule = "</schedule>" in llm_response
     has_narrative = "</narrative_state>" in llm_response
-
-    return not (has_actions and has_schedule and has_narrative)
+    return not (has_actions and has_narrative)
 
 
 def _parse_trigger_context(trigger: dict) -> dict:
-    """
-    Parse a trigger's context field into a structured dict.
-
-    Agent cycle triggers store JSON with 'purpose' and 'tools'.
-    Legacy triggers store plain text.
-
-    The tools list determines perception scope:
-      - Empty list → load all enabled tools (planning cycle behavior)
-      - Specific names → load only those tools (targeted cycle)
-    """
+    """Parse a trigger's context field into a structured dict."""
     context_str = trigger.get("context", "")
     if not context_str:
         return {"purpose": "Scheduled check-in", "tools": []}
-
     try:
         ctx = json.loads(context_str)
         return {
@@ -1214,11 +620,7 @@ def _parse_trigger_context(trigger: dict) -> dict:
             "tools": ctx.get("tools", []),
         }
     except (json.JSONDecodeError, TypeError):
-        # Legacy trigger — treat as planning cycle with the text as purpose
-        return {
-            "purpose": context_str,
-            "tools": [],
-        }
+        return {"purpose": context_str, "tools": []}
 
 
 def _get_method_tier(tool: Tool | None, method_name: str) -> str:
@@ -1231,40 +633,21 @@ def _get_method_tier(tool: Tool | None, method_name: str) -> str:
     return "unknown"
 
 
-def _get_method_obj(tool: Tool | None, method_name: str):
-    """Look up a ToolMethod object by name. Returns None if not found."""
-    if tool is None:
-        return None
-    for method in tool.get_methods():
-        if method.name == method_name:
-            return method
-    return None
-
-
 def _ensure_future_plan(
     memory: PersonaMemory,
     tools: dict[str, Tool],
     schedule_config: dict | None,
 ):
     """
-    Called at the end of every agent cycle. Ensures exactly one future
-    planning cycle exists per day, and deduplicates if the LLM and the
-    safety net both created one.
-
-    Two responsibilities:
-    1. If no future planning cycle exists, seed one for tomorrow's
-       start_time.
-    2. If multiple planning cycles exist for the same day, keep only
-       the earliest and delete the rest.
+    Ensure a future planning cycle exists. Seeds one for tomorrow's
+    start_time if none found, and deduplicates if multiple exist.
     """
     if not schedule_config:
-        return  # No schedule configured, agent is passive
+        return
 
     if not memory.has_future_planning_cycle():
-        # Safety net: schedule for tomorrow's start_time
         now = datetime.now()
         start_h, start_m = map(int, schedule_config["start_time"].split(":"))
-
         from datetime import timedelta
         tomorrow_start = now.replace(
             hour=start_h, minute=start_m, second=0, microsecond=0
@@ -1279,49 +662,34 @@ def _ensure_future_plan(
             }),
             recurring=None,
         )
-        logger.info(f"Safety net: no planning cycle found, seeded for {tomorrow_start}")
+        logger.info(f"Safety net: seeded planning cycle for {tomorrow_start}")
 
-    # Deduplicate: if multiple planning cycles exist for the same day,
-    # keep only the earliest per day and delete the rest.
     _deduplicate_planning_cycles(memory)
 
 
 def _deduplicate_planning_cycles(memory: PersonaMemory):
-    """
-    Remove duplicate planning cycles for the same day.
-
-    Both the LLM and the safety net can create planning cycles. If
-    both fire for the same day, we end up with duplicates. This
-    function groups future planning cycles by date, keeps the earliest
-    per day, and deletes the rest.
-    """
+    """Remove duplicate planning cycles for the same day."""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     active = memory.get_active_triggers()
 
-    # Collect future planning cycles grouped by date
     by_date: dict[str, list[dict]] = {}
     for trigger in active:
         if trigger["fire_at"] <= now_str:
             continue
-
         try:
             ctx = json.loads(trigger["context"]) if trigger["context"] else {}
             if len(ctx.get("tools", [])) != 0:
-                continue  # Not a planning cycle
+                continue
         except (json.JSONDecodeError, TypeError):
             continue
-
-        date = trigger["fire_at"][:10]  # "YYYY-MM-DD"
+        date = trigger["fire_at"][:10]
         if date not in by_date:
             by_date[date] = []
         by_date[date].append(trigger)
 
-    # For each date with multiple planning cycles, keep the earliest
     for date, cycles in by_date.items():
         if len(cycles) <= 1:
             continue
-
-        # Sort by fire_at, keep the first, delete the rest
         cycles.sort(key=lambda t: t["fire_at"])
         for duplicate in cycles[1:]:
             memory.delete_trigger(duplicate["id"])
@@ -1333,112 +701,93 @@ def _deduplicate_planning_cycles(memory: PersonaMemory):
 
 # --- Schedule Updates in Conversation Responses ---
 
-def strip_schedule_updates(response: str) -> tuple[str, list[str]]:
+def strip_schedule_updates(response: str) -> tuple[str, str | None]:
     """
     Strip <schedule_updates> tags from an LLM response.
 
-    Returns (clean_response, schedule_lines).
+    Returns (clean_response, actions_json_str).
     The clean_response has the tags removed and is what the user sees.
-    The schedule_lines are the raw lines inside the tags for parsing.
+    The actions_json_str is the raw JSON string inside the tags.
 
-    If no tags are present, returns (response, []).
-
-    Used by both the terminal (main.py) and Telegram (telegram_bot.py)
-    paths to handle schedule updates embedded in conversation responses.
+    If no tags are present, returns (response, None).
     """
     pattern = r"<schedule_updates>(.*?)</schedule_updates>"
     match = re.search(pattern, response, re.DOTALL)
 
     if not match:
-        return response.strip(), []
+        return response.strip(), None
 
-    # Extract the schedule commands
-    schedule_block = match.group(1).strip()
-    schedule_lines = [
-        line.strip() for line in schedule_block.split("\n")
-        if line.strip()
-    ]
+    actions_json = match.group(1).strip()
 
-    # Remove the tags from the response
     clean = response[:match.start()] + response[match.end():]
     clean = clean.strip()
 
-    return clean, schedule_lines
+    return clean, actions_json
 
 
-def apply_schedule_updates(schedule_lines: list[str], memory: PersonaMemory) -> list[dict]:
+def apply_schedule_updates(actions_json: str, memory: PersonaMemory) -> list[dict]:
     """
-    Parse and apply schedule update commands from an LLM response.
+    Parse and apply schedule update actions from a user conversation response.
 
-    Uses the same parsing and validation logic as the agent cycle.
-    Invalid commands are logged and skipped.
+    Uses the same JSON action format as the agent cycle. Actions are
+    validated and executed through the ScheduleTool.
 
-    The registered tool names include all known tools, not just the
-    ones instantiated in the current process. This is important
-    because the CLI doesn't have a Telegram send_fn, so TelegramTool
-    isn't created — but the agent should still be able to schedule
-    wake-ups that use Telegram. The trigger will fire in the Telegram
-    service process where the tool IS available.
+    The registered tool names include all known tools, not just the ones
+    instantiated in the current process. This allows the CLI to create
+    wake-ups that reference Telegram even though TelegramTool isn't loaded.
 
     Args:
-        schedule_lines: Raw schedule command strings from the LLM.
+        actions_json: Raw JSON string from inside <schedule_updates> tags.
         memory: The persona's memory instance.
 
     Returns:
-        List of result dicts with 'change', 'status', and optionally
-        'result' or 'reason' for each command processed.
+        List of result dicts with 'action', 'status', and optionally
+        'result' or 'reason'.
     """
-    from tools import create_tools
+    from tools.schedule_tool import ScheduleTool
 
-    tools = create_tools(memory)
-    schedule_config = memory.get_schedule_config()
-
-    # Include all known tool names — not just the ones instantiated
-    # in this process. The CLI won't have TelegramTool or possibly
-    # GoogleCalendarTool, but scheduled triggers that reference them
-    # will fire in the Telegram service where they ARE available.
-    registered_tools = set(tools.keys()) | KNOWN_TOOL_NAMES
+    schedule_tool = ScheduleTool(memory)
     results = []
 
-    for line in schedule_lines:
-        parsed = _parse_schedule_line(line)
-        if not parsed:
-            logger.warning(f"Failed to parse schedule update: {line[:100]}")
+    # Parse the JSON
+    parsed, parse_error = _parse_actions_json(actions_json)
+    if parse_error:
+        logger.warning(f"Failed to parse schedule updates JSON: {parse_error}")
+        results.append({
+            "action": actions_json[:100],
+            "status": "failed",
+            "reason": f"parse error: {parse_error}",
+        })
+        return results
+
+    for action in parsed:
+        tool_name = action.get("tool", "schedule")
+        method_name = action.get("method", "")
+        params = action.get("parameters", {})
+
+        # Only schedule actions are valid in <schedule_updates>
+        if tool_name != "schedule":
             results.append({
-                "change": line,
-                "status": "failed",
-                "reason": "parse error",
+                "action": f"{tool_name}.{method_name}",
+                "status": "rejected",
+                "reason": f"only schedule actions allowed in <schedule_updates>, got '{tool_name}'",
             })
             continue
 
-        valid, reason = _validate_schedule_change(
-            parsed, memory, schedule_config, registered_tools
-        )
-
-        if valid:
-            schedule_tool = tools.get("schedule")
-            if schedule_tool:
-                try:
-                    result = schedule_tool.execute(parsed["method"], **parsed["kwargs"])
-                    logger.info(f"Schedule update applied: {result}")
-                    results.append({
-                        "change": line,
-                        "status": "applied",
-                        "result": result,
-                    })
-                except Exception as e:
-                    logger.error(f"Schedule update failed: {e}")
-                    results.append({
-                        "change": line,
-                        "status": "failed",
-                        "reason": str(e),
-                    })
-        else:
-            logger.warning(f"Schedule update rejected: {reason} ({line[:80]})")
+        try:
+            result = schedule_tool.execute(method_name, **params)
+            logger.info(f"Schedule update applied: {result}")
             results.append({
-                "change": line,
-                "status": "rejected",
-                "reason": reason,
+                "action": f"schedule.{method_name}",
+                "status": "applied",
+                "result": result,
+            })
+        except (ValueError, Exception) as e:
+            logger.warning(f"Schedule update failed: {e}")
+            results.append({
+                "action": f"schedule.{method_name}",
+                "status": "failed",
+                "reason": str(e),
             })
 
     return results

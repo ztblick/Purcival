@@ -50,10 +50,10 @@ Your phone (Telegram)                         Your Linux box
     │            │     ├─ Perceive (tools)   │     │
     │            │     │  └─ Google Calendar ─┼──→ Google Calendar API
     │            │     ├─ Reason (Claude) ───┼──→ Claude API
+    │            │     ├─ Parse JSON actions  │     │
     │            │     ├─ Validate + act     │     │
-    │            │     ├─ Update schedule    │     │
     │            │     └─ Update narrative   │──→ memory.db
-    │            └──────────────────────────┘      
+    │            └──────────────────────────┘
 ```
 
 Each persona runs as its own process with its own Telegram bot and its own
@@ -204,6 +204,25 @@ contexts:
    time-sensitive ("remind me to give Tessa Tylenol at 9pm"), it silently
    schedules a reminder. No separate planning cycle needed.
 
+### Unified JSON action format
+
+All tool calls — including schedule management — use a single JSON format.
+The agent outputs three sections per cycle:
+
+- `<reasoning>` — freeform text (the agent's thinking process)
+- `<actions>` — a JSON array of tool calls (parsed and validated by code)
+- `<narrative_state>` — freeform text (the agent's updated understanding)
+
+The principle: schema-constrain the interface between LLM and code (actions
+are JSON), leave freeform the interface between LLM and LLM (reasoning and
+narrative stay as prose). This eliminates ambiguity in the action format and
+makes validation trivial — `json.loads()` either works or it doesn't.
+
+Schedule operations (add/modify/cancel wake-ups) are just tool calls to the
+ScheduleTool, validated and executed through the same pipeline as Telegram
+messages and calendar reads. There is no special-case handling for schedule
+operations.
+
 ### Configuring the agent
 
 Use `/schedule` in the terminal to set:
@@ -222,12 +241,24 @@ Targeted wake-ups (reminders, meeting prep) are always preserved.
 
 ### Guardrails
 
-All enforced by code, not just the LLM prompt:
-- Wake-ups outside operating hours are rejected
-- Daily action budget caps how much the agent does
-- Execute-tier actions (sending email, creating events) require explicit approval
-- Every action goes through a 7-check validation gate before execution
+Two layers of validation, all enforced by code, not just the LLM prompt:
+
+**Generic gate (agent loop):** applied to every tool call uniformly:
+- Tool must exist and be enabled
+- Method must exist on the tool
+- Tier must be permitted (execute-tier requires explicit approval)
+- Daily action budget must not be exhausted
+
+**Tool-specific validation (inside each tool):** each tool validates its
+own parameters and business rules:
+- ScheduleTool checks operating hours, future time, trigger existence
+- TelegramTool checks for empty messages
+- GoogleCalendarTool handles API errors with consecutive failure tracking
+
+Additional guardrails:
+- Wake-ups outside operating hours are rejected by ScheduleTool
 - `/schedule` never deletes targeted wake-ups
+- Every action is logged in the agent_actions audit trail
 
 ### Tools
 
@@ -363,7 +394,7 @@ purcival/
 ├── embeddings.py        Vector embeddings — generates embeddings via Ollama
 ├── summarizer.py        Summarization engine — compresses old conversations via Claude
 ├── proactive.py         Agent bootstrap and scheduler
-├── agent.py             Agent cycle + shared schedule update functions
+├── agent.py             Agent cycle — perceive, reason, validate, act (JSON actions)
 ├── google_auth.py       Google OAuth2 flow + credential management
 ├── tokens.py            Token counting — abstract interface for budget enforcement
 ├── config.py            Loads settings from .env
@@ -371,13 +402,13 @@ purcival/
 ├── tools/
 │   ├── __init__.py      Tool registry and factory
 │   ├── base.py          Tool and ToolMethod base classes
-│   ├── schedule_tool.py ScheduleTool — self-scheduling interface
+│   ├── schedule_tool.py ScheduleTool — self-scheduling with internal validation
 │   ├── telegram_tool.py TelegramTool — Telegram send wrapper
 │   └── google_calendar.py GoogleCalendarTool — multi-calendar reader
 ├── personas/            Personality definitions (markdown)
 ├── data/                Per-persona databases + shared user context (gitignored)
 ├── debug/               Prompt dumps from debug mode (gitignored)
-├── tests/               Test suite
+├── tests/               Test suite (70 tests)
 ├── google_client_secret.json  Google OAuth client secret (gitignored)
 ├── purcival@.service    Systemd template for background services
 ├── requirements.txt     Python dependencies
@@ -441,10 +472,11 @@ TELEGRAM_TOKEN_JO=
 - [x] Tool interface — extensible base class for agent capabilities
 - [x] ScheduleTool — agent manages its own trigger schedule
 - [x] TelegramTool — uniform interface for proactive messaging
-- [x] Action validation — 7-check code-level gate, budget enforcement
+- [x] Unified JSON action format — all tool calls (including schedule) in one JSON array
+- [x] Two-layer validation — generic gate in agent loop + tool-specific validation
 - [x] Narrative state — LLM maintains prose understanding across cycles
 - [x] Reasoning log — full traces for debugging (7-day retention)
-- [x] User message plan updates — <schedule_updates> in both terminal and Telegram
+- [x] User message plan updates — <schedule_updates> with JSON format
 - [x] Chat ID persistence — survives service restarts
 - [x] /schedule preserves targeted wake-ups
 - [x] Time awareness — agent knows current time and trigger fire time

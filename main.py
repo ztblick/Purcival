@@ -51,11 +51,6 @@ def _dump_prompt(
 ):
     """
     Write the full assembled prompt to a timestamped file in debug/.
-
-    The file shows exactly what the LLM receives: the complete system
-    prompt (with all sections) and the full messages array. Useful for
-    inspecting which summaries were selected, how many messages are in
-    the window, and the total token count.
     """
     DEBUG_DIR.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -112,8 +107,6 @@ def _print_response(text: str, provider: str, persona_name: str):
 def _pick_persona() -> str:
     """
     Show available personas and let the user pick one.
-
-    This runs at startup if no --persona flag was provided.
     """
     available = personas.list_personas()
 
@@ -134,9 +127,7 @@ def _pick_persona() -> str:
     table.add_column("Preview", style="status")
 
     for i, name in enumerate(available, 1):
-        # Show first line of the persona file as a preview
         prompt_text = personas.load_persona(name)
-        # Skip the markdown header line if it starts with #
         lines = [l for l in prompt_text.split("\n") if l.strip() and not l.startswith("#")]
         preview = lines[0][:60] + "..." if lines else "(empty)"
         table.add_row(str(i), name, preview)
@@ -147,7 +138,6 @@ def _pick_persona() -> str:
     while True:
         choice = console.input("[status]Enter name or number:[/status] ").strip()
 
-        # Accept by number
         if choice.isdigit():
             idx = int(choice) - 1
             if 0 <= idx < len(available):
@@ -155,7 +145,6 @@ def _pick_persona() -> str:
             console.print(f"[error]Pick 1–{len(available)}[/error]")
             continue
 
-        # Accept by name
         if choice.lower() in available:
             return choice.lower()
 
@@ -165,18 +154,6 @@ def _pick_persona() -> str:
 def _handle_schedule(memory: PersonaMemory, persona_name: str):
     """
     Interactive schedule configuration for the agent.
-
-    Prompts the user for wake time (first planning cycle), sleep time
-    (last allowed wake-up), and daily action limit. Saves to the
-    database and adjusts the agent's planning cycles if the operating
-    hours changed.
-
-    Targeted wake-ups (pre-meeting reminders, user-requested reminders,
-    etc.) are NEVER deleted by this command. Only planning cycles that
-    fall outside the new operating window are removed.
-
-    The running Telegram service picks up schedule changes without
-    restarting.
     """
     # Show current config if one exists
     current = memory.get_schedule_config()
@@ -227,7 +204,6 @@ def _handle_schedule(memory: PersonaMemory, persona_name: str):
                 raise ValueError
             end_time = f"{end_h:02d}:{end_m:02d}"
 
-            # Validate end is after start
             if (end_h * 60 + end_m) <= (start_h * 60 + start_m):
                 console.print("[error]Sleep time must be after wake time[/error]")
                 continue
@@ -261,14 +237,10 @@ def _handle_schedule(memory: PersonaMemory, persona_name: str):
     )
 
     # --- Save config ---
-    # interval_minutes is preserved for backward compat but not used
-    # by the self-scheduling agent
     memory.set_schedule_config(start_time, end_time, 30, max_actions)
 
     # --- Adjust triggers only if operating hours changed ---
     if hours_changed:
-        # Remove only planning cycles outside the new window.
-        # Targeted wake-ups (reminders, meeting prep, etc.) are preserved.
         removed = memory.reschedule_planning_cycles()
         if removed:
             console.print(
@@ -276,10 +248,8 @@ def _handle_schedule(memory: PersonaMemory, persona_name: str):
                 f"new operating hours[/system]"
             )
 
-        # Ensure the agent has a planning cycle within the new window
         ensure_agent_has_plan(memory)
 
-        # Count what exists now
         active = memory.get_active_triggers()
         trigger_count = len([t for t in active if not t.get("fired")])
 
@@ -290,7 +260,6 @@ def _handle_schedule(memory: PersonaMemory, persona_name: str):
             f"    {trigger_count} trigger(s) active — targeted wake-ups preserved\n"
         )
     else:
-        # Only the action limit changed — no trigger modifications needed
         console.print(
             f"\n  [system]Schedule updated for[/system] [persona]{persona_name}[/persona]\n"
             f"    Wake: {start_time}  Sleep: {end_time}\n"
@@ -302,15 +271,6 @@ def _handle_schedule(memory: PersonaMemory, persona_name: str):
 def _handle_plan(memory: PersonaMemory, persona_name: str, persona_prompt: str):
     """
     Manually run a planning cycle from the terminal.
-
-    Synthesizes a planning cycle trigger and runs the full agent cycle.
-    Any Telegram messages the agent tries to send are printed to the
-    terminal instead (the CLI doesn't have a live Telegram connection).
-
-    This is useful for:
-        - Testing the agent cycle after code changes
-        - Recovering from a failed morning planning cycle
-        - Seeing what the agent would do without waiting for a trigger
     """
     import asyncio
     import json
@@ -323,14 +283,11 @@ def _handle_plan(memory: PersonaMemory, persona_name: str, persona_prompt: str):
         f"[persona]{persona_name}[/persona][system]...[/system]\n"
     )
 
-    # Collect messages the agent tries to send via Telegram
     cli_messages = []
 
     async def cli_send_fn(text: str):
-        """Capture Telegram messages for terminal display."""
         cli_messages.append(text)
 
-    # Synthesize a planning cycle trigger
     now = datetime.now()
     trigger = {
         "id": None,
@@ -360,7 +317,6 @@ def _handle_plan(memory: PersonaMemory, persona_name: str, persona_prompt: str):
         return
 
     if success:
-        # Show any messages the agent composed
         if cli_messages:
             console.print(f"  [system]Agent composed {len(cli_messages)} message(s):[/system]\n")
             for msg in cli_messages:
@@ -369,7 +325,6 @@ def _handle_plan(memory: PersonaMemory, persona_name: str, persona_prompt: str):
         else:
             console.print("  [system]Planning cycle complete — no messages sent.[/system]")
 
-        # Show what was scheduled
         active = memory.get_active_triggers()
         now_str = now.strftime("%Y-%m-%d %H:%M:%S")
         future = [t for t in active if t["fire_at"] > now_str]
@@ -396,7 +351,6 @@ def _print_banner(provider: str, persona_name: str, memory: PersonaMemory, debug
     total = memory.get_message_count()
     memory_status = f"{total} messages in memory" if total > 0 else "fresh start"
 
-    # Show schedule status
     schedule = memory.get_schedule_config()
     if schedule:
         max_actions = schedule.get("max_actions_per_day", 25)
@@ -408,7 +362,6 @@ def _print_banner(provider: str, persona_name: str, memory: PersonaMemory, debug
     else:
         schedule_status = "not configured"
 
-    # Show narrative state snippet
     narrative = memory.get_narrative()
     agent_status = ""
     if narrative:
@@ -442,10 +395,6 @@ def _print_banner(provider: str, persona_name: str, memory: PersonaMemory, debug
 def chat_loop(provider: str, persona_name: str, debug: bool = False):
     """
     Interactive conversation in the terminal.
-
-    Messages are persisted to the persona's database. Switching personas
-    loads a different database — each persona has its own memory.
-    The 'clear' command wipes the current persona's entire history.
     """
     persona_prompt = personas.load_persona(persona_name)
     memory = PersonaMemory(persona_name)
@@ -482,42 +431,31 @@ def chat_loop(provider: str, persona_name: str, debug: bool = False):
                 console.print("[system]— clear cancelled —[/system]\n")
             continue
 
-        # --- Provider switching ---
         if user_input.lower() == "/claude":
             provider = "claude"
-            console.print(
-                f"[system]— switched to [assistant]{provider}[/assistant] —[/system]\n"
-            )
+            console.print(f"[system]— switched to [assistant]{provider}[/assistant] —[/system]\n")
             continue
 
         if user_input.lower() == "/ollama":
             provider = "ollama"
-            console.print(
-                f"[system]— switched to [assistant]{provider}[/assistant] —[/system]\n"
-            )
+            console.print(f"[system]— switched to [assistant]{provider}[/assistant] —[/system]\n")
             continue
 
-        # --- Persona switching ---
         if user_input.lower() == "/persona":
             persona_name = _pick_persona()
             persona_prompt = personas.load_persona(persona_name)
             memory = PersonaMemory(persona_name)
-            console.print(
-                f"[system]— now talking to [persona]{persona_name}[/persona] —[/system]\n"
-            )
+            console.print(f"[system]— now talking to [persona]{persona_name}[/persona] —[/system]\n")
             continue
 
-        # --- Schedule configuration ---
         if user_input.lower() == "/schedule":
             _handle_schedule(memory, persona_name)
             continue
 
-        # --- Manual planning cycle ---
         if user_input.lower() == "/plan":
             _handle_plan(memory, persona_name, persona_prompt)
             continue
 
-        # --- Status ---
         if user_input.lower() == "/status":
             model = (config.CLAUDE_MODEL if provider == "claude"
                      else config.OLLAMA_MODEL)
@@ -541,10 +479,7 @@ def chat_loop(provider: str, persona_name: str, debug: bool = False):
                     f"{schedule['start_time']}–{schedule['end_time']}, "
                     f"max {max_actions} actions/day"
                 )
-                console.print(
-                    f"  [status]Actions:[/status]    "
-                    f"{actions_today}/{max_actions} used today"
-                )
+                console.print(f"  [status]Actions:[/status]    {actions_today}/{max_actions} used today")
             else:
                 console.print(f"  [status]Schedule:[/status]   not configured")
 
@@ -557,7 +492,6 @@ def chat_loop(provider: str, persona_name: str, debug: bool = False):
             console.print(f"  [status]Debug:[/status]      {'ON' if debug else 'off'}\n")
             continue
 
-        # --- Debug toggle ---
         if user_input.lower() == "/debug":
             debug = not debug
             state = "ON — prompts will be saved to debug/" if debug else "off"
@@ -565,13 +499,10 @@ def chat_loop(provider: str, persona_name: str, debug: bool = False):
             continue
 
         # --- Send message ---
-        # Persist user message first
         memory.add_message("user", user_input)
 
-        # Assemble full context: system prompt + recent messages
         system_prompt, messages = assemble_context(persona_prompt, memory)
 
-        # Dump the full prompt to a file if debug is on
         if debug:
             path = _dump_prompt(system_prompt, messages, provider, persona_name)
             console.print(f"[status]  Debug: prompt saved to {path}[/status]")
@@ -588,12 +519,9 @@ def chat_loop(provider: str, persona_name: str, debug: bool = False):
                 continue
 
         # Strip schedule updates before displaying or persisting.
-        # The LLM may include <schedule_updates> tags when it detects
-        # the user's message affects its plan.
         from agent import strip_schedule_updates, apply_schedule_updates
-        clean_response, schedule_lines = strip_schedule_updates(response)
+        clean_response, actions_json = strip_schedule_updates(response)
 
-        # Persist the clean response (without schedule tags)
         memory.add_message("assistant", clean_response)
 
         console.print()
@@ -601,8 +529,8 @@ def chat_loop(provider: str, persona_name: str, debug: bool = False):
         console.print()
 
         # Apply schedule updates silently
-        if schedule_lines:
-            results = apply_schedule_updates(schedule_lines, memory)
+        if actions_json:
+            results = apply_schedule_updates(actions_json, memory)
             applied = [r for r in results if r["status"] == "applied"]
             rejected = [r for r in results if r["status"] == "rejected"]
             failed = [r for r in results if r["status"] == "failed"]
@@ -644,11 +572,8 @@ def single_message(message: str, provider: str, persona_name: str):
     persona_prompt = personas.load_persona(persona_name)
     memory = PersonaMemory(persona_name)
 
-    # Persist and include history even in single-message mode —
-    # this way the persona remembers past single-message interactions too.
     memory.add_message("user", message)
 
-    # Assemble full context
     system_prompt, messages = assemble_context(persona_prompt, memory)
 
     with console.status("[status]Thinking...[/status]", spinner="dots"):
@@ -659,50 +584,43 @@ def single_message(message: str, provider: str, persona_name: str):
         )
 
     from agent import strip_schedule_updates, apply_schedule_updates
-    clean_response, schedule_lines = strip_schedule_updates(response)
+    clean_response, actions_json = strip_schedule_updates(response)
 
     memory.add_message("assistant", clean_response)
     _print_response(clean_response, provider, persona_name)
 
     # Apply schedule updates silently
-    if schedule_lines:
-        apply_schedule_updates(schedule_lines, memory)
+    if actions_json:
+        apply_schedule_updates(actions_json, memory)
 
-    # Check if summarization is needed
     try:
         check_and_summarize(memory)
     except Exception:
-        pass  # Silent in single-message mode
+        pass
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Personal AI Assistant")
     parser.add_argument(
-        "-m", "--message",
-        type=str,
+        "-m", "--message", type=str,
         help="Send a single message instead of entering chat mode",
     )
     parser.add_argument(
-        "-p", "--provider",
-        type=str,
+        "-p", "--provider", type=str,
         choices=["claude", "ollama"],
         default=config.DEFAULT_PROVIDER,
         help="LLM provider to use (default: from .env)",
     )
     parser.add_argument(
-        "--persona",
-        type=str,
-        default=None,
+        "--persona", type=str, default=None,
         help="Persona to use (e.g. purcival, ada, default)",
     )
     parser.add_argument(
-        "--debug",
-        action="store_true",
+        "--debug", action="store_true",
         help="Enable prompt dumping — saves full prompts to debug/",
     )
     args = parser.parse_args()
 
-    # Determine persona — from flag, env, or interactive picker
     if args.persona:
         if not personas.persona_exists(args.persona):
             console.print(f"[error]Persona '{args.persona}' not found.[/error]")
@@ -710,10 +628,8 @@ if __name__ == "__main__":
             raise SystemExit(1)
         persona_name = args.persona
     elif args.message:
-        # Non-interactive mode — use default persona
         persona_name = config.DEFAULT_PERSONA
     else:
-        # Interactive mode — let user pick
         persona_name = _pick_persona()
 
     if args.message:
