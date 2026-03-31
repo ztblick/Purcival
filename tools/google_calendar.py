@@ -172,7 +172,8 @@ class GoogleCalendarTool(Tool):
 
         Caches the calendar list in tool_state with a 24-hour TTL.
         Returns a list of dicts with 'id', 'summary', 'primary',
-        and 'access_role'.
+        'access_role', and 'selected'. Only calendars the user has
+        toggled on in their Google Calendar view are included.
         """
         cached = self.memory.get_tool_state(self.name, "calendar_list")
         last_refreshed = self.memory.get_tool_state(
@@ -196,11 +197,22 @@ class GoogleCalendarTool(Tool):
 
         calendars = []
         for cal in items:
+            # Skip calendars the user has toggled off in their view.
+            # The 'selected' field is False when a calendar is hidden
+            # in the Google Calendar sidebar. Defaults to True if the
+            # field is absent (primary calendars don't always have it).
+            if not cal.get("selected", True):
+                logger.debug(
+                    f"Skipping hidden calendar: {cal.get('summary', cal['id'])}"
+                )
+                continue
+
             calendars.append({
                 "id": cal["id"],
                 "summary": cal.get("summary", cal["id"]),
                 "primary": cal.get("primary", False),
                 "access_role": cal.get("accessRole", "reader"),
+                "selected": True,
             })
 
         # Cache it
@@ -331,6 +343,11 @@ class GoogleCalendarTool(Tool):
             changed: list of (event, changes_description) for modified events
             cancelled: list of events in known but not in current
             imminent: list of events starting within IMMINENT_THRESHOLD_MINUTES
+
+        Events that have ended (their end time is in the past) are NOT
+        reported as cancelled — they simply aged out of the query window.
+        This prevents all-day events from yesterday being flagged as
+        "cancelled" when they're just over.
         """
         known_by_id = {e["id"]: e for e in known}
         current_by_id = {e["id"]: e for e in current}
@@ -396,12 +413,44 @@ class GoogleCalendarTool(Tool):
                 if changes:
                     changed_events.append((event, ", ".join(changes)))
 
-        # Find cancelled events (in known but not in current)
-        cancelled_events = [
-            known_by_id[eid]
-            for eid in known_by_id
-            if eid not in current_by_id
-        ]
+        # Find cancelled events (in known but not in current).
+        # Skip events that simply aged out of the query window —
+        # an all-day event from yesterday or a timed event that ended
+        # is not "cancelled," it's over.
+        cancelled_events = []
+        for eid in known_by_id:
+            if eid in current_by_id:
+                continue  # Still in the API response — not cancelled
+
+            event = known_by_id[eid]
+            end_str = event.get("end", "")
+
+            # Check if the event has ended (and thus just aged out)
+            try:
+                if event.get("all_day"):
+                    # All-day event: end date is exclusive in Google Calendar
+                    # (an event on March 15 has end date March 16).
+                    # If the end date is today or earlier, it's over.
+                    from datetime import date as date_type
+                    end_date = date_type.fromisoformat(end_str)
+                    if end_date <= now.date():
+                        continue  # All-day event has passed — not a cancellation
+                elif end_str:
+                    # Timed event: parse the ISO datetime
+                    if end_str.endswith("Z"):
+                        end_dt = datetime.fromisoformat(
+                            end_str.replace("Z", "+00:00")
+                        )
+                        if end_dt.replace(tzinfo=None) < now:
+                            continue  # Timed event has ended
+                    else:
+                        end_dt = datetime.fromisoformat(end_str)
+                        if end_dt.replace(tzinfo=None) < now:
+                            continue  # Timed event has ended
+            except (ValueError, TypeError):
+                pass  # Can't parse end time — treat as genuinely cancelled
+
+            cancelled_events.append(event)
 
         return {
             "new": new_events,

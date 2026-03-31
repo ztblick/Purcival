@@ -44,11 +44,12 @@ def _credentials_path(persona_name: str) -> Path:
 
 # --- Scopes ---
 
-# Start with read-only. When write access is needed, add the write
-# scopes here and re-run the auth flow — the user will be prompted
-# to grant the additional permissions.
+# Read-only scopes for calendar and email. When write access is
+# needed, add the write scopes here and re-run the auth flow —
+# the user will be prompted to grant the additional permissions.
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/gmail.readonly",
 ]
 
 
@@ -73,7 +74,7 @@ def get_credentials(persona_name: str) -> Credentials | None:
     if not creds_path.exists():
         logger.info(
             f"No Google credentials for '{persona_name}'. "
-            f"Run the auth flow to set up calendar access."
+            f"Run the auth flow to set up Google access."
         )
         return None
 
@@ -108,8 +109,8 @@ def run_auth_flow(persona_name: str):
     Run the interactive OAuth2 authorization flow.
 
     Opens a browser window for the user to sign in and grant
-    calendar access. Saves the resulting credentials (including
-    the refresh token) to the persona's data directory.
+    calendar and email access. Saves the resulting credentials
+    (including the refresh token) to the persona's data directory.
 
     This is meant to be run once from the terminal, not from
     the bot or agent loop.
@@ -127,8 +128,12 @@ def run_auth_flow(persona_name: str):
         )
         return
 
-    print(f"\nStarting Google Calendar authorization for '{persona_name}'...")
+    print(f"\nStarting Google authorization for '{persona_name}'...")
     print("A browser window will open. Sign in and grant access.\n")
+    print("Scopes requested:")
+    for scope in SCOPES:
+        print(f"  - {scope}")
+    print()
 
     flow = InstalledAppFlow.from_client_secrets_file(
         str(CLIENT_SECRET_PATH),
@@ -152,15 +157,24 @@ def run_auth_flow(persona_name: str):
         calendar_list = service.calendarList().list().execute()
         calendars = calendar_list.get("items", [])
 
-        print(f"\nSuccess! Found {len(calendars)} calendar(s):\n")
+        print(f"\nCalendar access verified! Found {len(calendars)} calendar(s):\n")
         for cal in calendars:
             primary = " (primary)" if cal.get("primary") else ""
             role = cal.get("accessRole", "unknown")
             print(f"  • {cal['summary']}{primary} [{role}]")
-        print()
     except Exception as e:
-        print(f"\nCredentials saved, but verification failed: {e}")
-        print("The auth flow completed — this error may resolve itself.\n")
+        print(f"\nCalendar verification failed: {e}")
+
+    # Quick verification: check Gmail profile
+    try:
+        gmail_service = build("gmail", "v1", credentials=creds)
+        profile = gmail_service.users().getProfile(userId="me").execute()
+        email = profile.get("emailAddress", "unknown")
+        print(f"\nGmail access verified! Email: {email}")
+    except Exception as e:
+        print(f"\nGmail verification failed: {e}")
+
+    print()
 
 
 def has_credentials(persona_name: str) -> bool:

@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # in the current process. Used to validate tool names in wake-ups.
 # The CLI doesn't have TelegramTool (no send_fn) but should still
 # allow scheduling wake-ups that use it.
-KNOWN_TOOL_NAMES = {"schedule", "telegram", "google_calendar"}
+KNOWN_TOOL_NAMES = {"schedule", "telegram", "google_calendar", "gmail"}
 
 
 class ScheduleTool(Tool):

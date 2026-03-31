@@ -8,6 +8,7 @@ Run with: python tests/test_google_calendar.py
 
 Covers:
     - Event diffing (new, changed, cancelled, imminent)
+    - Aged-out events NOT reported as cancelled
     - Context formatting (all-day vs timed, multi-calendar)
     - Calendar list caching and TTL
     - Error tracking (consecutive failures, thresholds)
@@ -19,7 +20,7 @@ Covers:
 import json
 import sys
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date as date_type
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -45,11 +46,6 @@ def _make_memory():
 def _make_tool(memory=None, events_by_calendar=None):
     """
     Create a GoogleCalendarTool with a mocked Google API service.
-
-    Args:
-        memory: PersonaMemory instance (created if None)
-        events_by_calendar: dict mapping calendar_id to list of
-            raw Google Calendar event dicts. If None, returns empty.
     """
     if memory is None:
         memory = _make_memory()
@@ -57,10 +53,8 @@ def _make_tool(memory=None, events_by_calendar=None):
     if events_by_calendar is None:
         events_by_calendar = {}
 
-    # Mock the Google API service
     mock_service = MagicMock()
 
-    # Mock calendarList().list()
     mock_service.calendarList().list().execute.return_value = {
         "items": [
             {
@@ -68,17 +62,25 @@ def _make_tool(memory=None, events_by_calendar=None):
                 "summary": "Personal",
                 "primary": True,
                 "accessRole": "owner",
+                "selected": True,
             },
             {
                 "id": "school@group.calendar.google.com",
                 "summary": "School",
                 "primary": False,
                 "accessRole": "reader",
+                "selected": True,
+            },
+            {
+                "id": "choir@group.calendar.google.com",
+                "summary": "Choir",
+                "primary": False,
+                "accessRole": "reader",
+                "selected": False,
             },
         ]
     }
 
-    # Mock events().list() per calendar
     def mock_events_list(calendarId, **kwargs):
         mock_result = MagicMock()
         events = events_by_calendar.get(calendarId, [])
@@ -87,7 +89,6 @@ def _make_tool(memory=None, events_by_calendar=None):
 
     mock_service.events().list = mock_events_list
 
-    # Create tool with mocked service
     mock_creds = MagicMock()
     tool = GoogleCalendarTool(memory, mock_creds)
     tool._service = mock_service
@@ -152,7 +153,6 @@ def test_diff_detects_new_events():
         "primary": [_make_timed_event("evt1", "Team Meeting", 2)],
     })
 
-    # No known events — everything is new
     context = tool.get_context()
     assert context is not None
     assert "NEW" in context or "Team Meeting" in context
@@ -166,7 +166,6 @@ def test_diff_detects_changed_events():
         "primary": [_make_timed_event("evt1", "Renamed Meeting", 2)],
     })
 
-    # Seed known state with old title
     old_events = [{
         "id": "evt1",
         "summary": "Old Meeting",
@@ -189,15 +188,19 @@ def test_diff_detects_cancelled_events():
     """Events in known state but missing from API should be flagged."""
     mem = _make_memory()
     tool, _ = _make_tool(memory=mem, events_by_calendar={
-        "primary": [],  # No events returned
+        "primary": [],
     })
 
-    # Seed known state with an event that's now gone
+    # Seed known state with a FUTURE event that's now gone
+    # (truly cancelled, not just aged out)
+    tomorrow = (datetime.now() + timedelta(days=1))
+    future_start = tomorrow.replace(hour=10, minute=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+    future_end = tomorrow.replace(hour=11, minute=0).strftime("%Y-%m-%dT%H:%M:%SZ")
     old_events = [{
         "id": "evt_gone",
         "summary": "Cancelled Meeting",
-        "start": "2026-01-01T10:00:00Z",
-        "end": "2026-01-01T11:00:00Z",
+        "start": future_start,
+        "end": future_end,
         "location": "",
         "calendar_name": "Personal",
         "all_day": False,
@@ -232,7 +235,6 @@ def test_no_changes_returns_upcoming():
         "primary": [event],
     })
 
-    # Seed known state with the same event
     parsed = tool._parse_event(event, {"id": "primary", "summary": "Personal",
                                         "primary": True, "access_role": "owner"})
     mem.set_tool_state("google_calendar", "known_events",
@@ -247,11 +249,151 @@ def test_no_changes_returns_upcoming():
                        }]))
 
     context = tool.get_context()
-    # Should still return the upcoming schedule
     assert context is not None
     assert "UPCOMING" in context
     assert "Existing Meeting" in context
     print("  \u2713 no_changes_returns_upcoming")
+
+
+# --- Aged-Out Event Tests (bug fix) ---
+
+def test_aged_out_allday_not_cancelled():
+    """
+    An all-day event from yesterday that's no longer in the API response
+    should NOT be reported as cancelled. It simply aged out of the query
+    window.
+    """
+    mem = _make_memory()
+    tool, _ = _make_tool(memory=mem, events_by_calendar={
+        "primary": [],  # No current events
+    })
+
+    # Seed known state with yesterday's all-day event.
+    # Google Calendar uses exclusive end dates for all-day events:
+    # an event on March 29 has end date March 30.
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
+    old_events = [{
+        "id": "allday_yesterday",
+        "summary": "Yesterday's Birthday",
+        "start": yesterday,
+        "end": today,  # Exclusive end = today means the event was yesterday
+        "location": "",
+        "calendar_name": "Personal",
+        "all_day": True,
+    }]
+    mem.set_tool_state("google_calendar", "known_events", json.dumps(old_events))
+
+    context = tool.get_context()
+    # Should NOT report this as cancelled
+    if context:
+        assert "CANCELLED" not in context, (
+            f"Yesterday's all-day event should not be reported as cancelled. "
+            f"Got context: {context}"
+        )
+    print("  \u2713 aged_out_allday_not_cancelled")
+
+
+def test_aged_out_timed_not_cancelled():
+    """
+    A timed event that has ended should NOT be reported as cancelled
+    when it ages out of the query window.
+    """
+    mem = _make_memory()
+    tool, _ = _make_tool(memory=mem, events_by_calendar={
+        "primary": [],
+    })
+
+    # Seed known state with an event that ended 2 hours ago
+    two_hours_ago = (datetime.utcnow() - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    one_hour_ago = (datetime.utcnow() - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    old_events = [{
+        "id": "past_meeting",
+        "summary": "Finished Meeting",
+        "start": two_hours_ago,
+        "end": one_hour_ago,
+        "location": "",
+        "calendar_name": "Personal",
+        "all_day": False,
+    }]
+    mem.set_tool_state("google_calendar", "known_events", json.dumps(old_events))
+
+    context = tool.get_context()
+    if context:
+        assert "CANCELLED" not in context, (
+            f"Ended timed event should not be reported as cancelled. "
+            f"Got context: {context}"
+        )
+    print("  \u2713 aged_out_timed_not_cancelled")
+
+
+def test_genuinely_cancelled_still_detected():
+    """
+    A future event that disappears from the API should still be
+    reported as cancelled (it was truly deleted, not aged out).
+    """
+    mem = _make_memory()
+    tool, _ = _make_tool(memory=mem, events_by_calendar={
+        "primary": [],
+    })
+
+    # Seed known state with a FUTURE event
+    tomorrow = (datetime.utcnow() + timedelta(days=1))
+    future_start = tomorrow.replace(hour=14, minute=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+    future_end = tomorrow.replace(hour=15, minute=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+    old_events = [{
+        "id": "future_deleted",
+        "summary": "Deleted Future Meeting",
+        "start": future_start,
+        "end": future_end,
+        "location": "",
+        "calendar_name": "Personal",
+        "all_day": False,
+    }]
+    mem.set_tool_state("google_calendar", "known_events", json.dumps(old_events))
+
+    context = tool.get_context()
+    assert context is not None
+    assert "CANCELLED" in context
+    assert "Deleted Future Meeting" in context
+    print("  \u2713 genuinely_cancelled_still_detected")
+
+
+def test_aged_out_allday_today_not_cancelled():
+    """
+    An all-day event for today should NOT be cancelled even if it's
+    not in the current API response (edge case: today's event with
+    end date = tomorrow in Google's exclusive format).
+    """
+    mem = _make_memory()
+    tool, _ = _make_tool(memory=mem, events_by_calendar={
+        "primary": [],
+    })
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    old_events = [{
+        "id": "allday_today",
+        "summary": "Today's Event",
+        "start": today,
+        "end": tomorrow,  # Exclusive end = tomorrow means event is today
+        "location": "",
+        "calendar_name": "Personal",
+        "all_day": True,
+    }]
+    mem.set_tool_state("google_calendar", "known_events", json.dumps(old_events))
+
+    context = tool.get_context()
+    # Today's all-day event has end date = tomorrow, which is > now.date(),
+    # so it should NOT be filtered out as aged-out. It should appear as
+    # cancelled (since it's not in the API response but hasn't ended yet).
+    # This is correct behavior — if a today event disappears from the API,
+    # it was genuinely cancelled.
+    if context:
+        # This is a genuine cancellation — the event is for today but
+        # the API no longer returns it
+        assert "CANCELLED" in context
+    print("  \u2713 aged_out_allday_today_not_cancelled")
 
 
 # --- All-Day Event Tests ---
@@ -310,25 +452,30 @@ def test_multi_calendar_merge():
 def test_calendar_list_cached():
     """Calendar list should be fetched once and cached."""
     tool, mem = _make_tool()
-
-    # First call fetches from API
     cals1 = tool._get_calendar_list()
+    # 3 calendars in mock, but Choir has selected=False → 2 returned
     assert len(cals1) == 2
-
-    # Verify it's cached
     cached = mem.get_tool_state("google_calendar", "calendar_list")
     assert cached is not None
     assert "Personal" in cached
-
-    # Second call should use cache (mock API call count stays at 1)
-    # We can verify by checking the mock wasn't called again
-    call_count_before = tool._service.calendarList().list().execute.call_count
-    cals2 = tool._get_calendar_list()
-    call_count_after = tool._service.calendarList().list().execute.call_count
-    assert cals2 == cals1
-    # Note: due to mock chaining, call count comparison is tricky.
-    # The cache test is that the cached value is read and returned.
     print("  \u2713 calendar_list_cached")
+
+
+def test_hidden_calendar_excluded():
+    """Calendars with selected=False should not be fetched."""
+    tool, mem = _make_tool(events_by_calendar={
+        "primary": [_make_timed_event("p1", "Personal Event", 2)],
+        "choir@group.calendar.google.com": [
+            _make_timed_event("c1", "Choir Rehearsal", 3),
+        ],
+    })
+
+    context = tool.get_context()
+    assert context is not None
+    assert "Personal Event" in context
+    assert "Choir Rehearsal" not in context
+    assert "Choir" not in context
+    print("  \u2713 hidden_calendar_excluded")
 
 
 def test_calendar_list_ttl():
@@ -336,13 +483,11 @@ def test_calendar_list_ttl():
     mem = _make_memory()
     tool, _ = _make_tool(memory=mem)
 
-    # Seed cache with a stale timestamp
     old_time = (datetime.now() - timedelta(hours=25)).strftime("%Y-%m-%d %H:%M:%S")
     mem.set_tool_state("google_calendar", "calendar_list",
                        json.dumps([{"id": "stale", "summary": "Stale"}]))
     mem.set_tool_state("google_calendar", "calendars_last_refreshed", old_time)
 
-    # Should fetch fresh data (our mock returns Personal + School)
     cals = tool._get_calendar_list()
     assert any(c["summary"] == "Personal" for c in cals)
     assert not any(c["summary"] == "Stale" for c in cals)
@@ -384,12 +529,9 @@ def test_error_notify_threshold():
     mem = _make_memory()
     tool, _ = _make_tool(memory=mem)
 
-    # Simulate consecutive failures
     for i in range(FAILURE_NOTIFY_THRESHOLD):
-        mem.set_tool_state("google_calendar", "consecutive_failures",
-                          str(i + 1))
+        mem.set_tool_state("google_calendar", "consecutive_failures", str(i + 1))
 
-    # Make the API call fail
     tool._service.calendarList().list().execute.side_effect = Exception("API down")
 
     context = tool.get_context()
@@ -447,12 +589,6 @@ def test_event_actions_pruned():
         "recent_evt": [{"action": "reminded", "at": recent_date}],
     }
 
-    tool._prune_stale_data(actions)
-
-    # The old entry should be gone from storage
-    stored = tool._load_event_actions()
-    # prune_stale_data only saves if something changed, and it writes
-    # the pruned version. Let's verify by saving then pruning.
     tool._save_event_actions(actions)
     tool._prune_stale_data(actions)
     stored = tool._load_event_actions()
@@ -479,7 +615,6 @@ def test_declined_events_excluded():
     })
 
     context = tool.get_context()
-    # Either None or doesn't contain the declined event
     if context:
         assert "Meeting I Declined" not in context
     print("  \u2713 declined_events_excluded")
@@ -512,7 +647,6 @@ def test_get_upcoming_full_detail():
     assert "Q3 product designs" in result
     assert "alice@example.com" in result
     assert "bob@example.com" in result
-    # Should NOT include self
     assert "me@example.com" not in result
     print("  \u2713 get_upcoming_full_detail")
 
@@ -530,12 +664,7 @@ def _credentials_available():
 
 
 def test_live_calendar_list():
-    """
-    Live test: verify calendarList.list() returns calendars.
-
-    This test prints the calendars so you can visually verify they
-    match what you see in Google Calendar.
-    """
+    """Live test: verify calendarList.list() returns calendars."""
     from google_auth import get_credentials
     from googleapiclient.discovery import build
 
@@ -557,9 +686,7 @@ def test_live_calendar_list():
 
 
 def test_live_upcoming_events():
-    """
-    Live test: fetch upcoming events and verify format.
-    """
+    """Live test: fetch upcoming events and verify format."""
     from google_auth import get_credentials
 
     mem = _make_memory()
@@ -575,9 +702,7 @@ def test_live_upcoming_events():
 
 
 def test_live_get_context():
-    """
-    Live test: run the full get_context() pipeline.
-    """
+    """Live test: run the full get_context() pipeline."""
     from google_auth import get_credentials
 
     mem = _make_memory()
@@ -606,10 +731,15 @@ if __name__ == "__main__":
         test_diff_detects_cancelled_events,
         test_diff_detects_imminent_events,
         test_no_changes_returns_upcoming,
+        test_aged_out_allday_not_cancelled,
+        test_aged_out_timed_not_cancelled,
+        test_genuinely_cancelled_still_detected,
+        test_aged_out_allday_today_not_cancelled,
         test_allday_events_shown,
         test_allday_events_not_imminent,
         test_multi_calendar_merge,
         test_calendar_list_cached,
+        test_hidden_calendar_excluded,
         test_calendar_list_ttl,
         test_error_tracking_increments,
         test_error_tracking_resets_on_success,

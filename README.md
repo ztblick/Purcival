@@ -11,9 +11,9 @@ summarized and retrieved by semantic similarity when they become relevant again.
 
 The primary persona (Jo) is a **self-scheduling autonomous agent** that
 plans its own day, manages its own wake-up schedule, reads your Google
-Calendar, and sends proactive messages via Telegram. The agent reasons about
-what to do using Claude, schedules targeted wake-ups with specific purposes,
-and adjusts its plan when your situation changes.
+Calendar and Gmail inbox, and sends proactive messages via Telegram. The
+agent reasons about what to do using Claude, schedules targeted wake-ups
+with specific purposes, and adjusts its plan when your situation changes.
 
 ## How it works
 
@@ -48,7 +48,8 @@ Your phone (Telegram)                         Your Linux box
     │            │   Check triggers every 60s│     │
     │            │   If due → run agent cycle│     │
     │            │     ├─ Perceive (tools)   │     │
-    │            │     │  └─ Google Calendar ─┼──→ Google Calendar API
+    │            │     │  ├─ Google Calendar ─┼──→ Google Calendar API
+    │            │     │  └─ Gmail ───────────┼──→ Gmail API
     │            │     ├─ Reason (Claude) ───┼──→ Claude API
     │            │     ├─ Parse JSON actions  │     │
     │            │     ├─ Validate + act     │     │
@@ -254,6 +255,7 @@ own parameters and business rules:
 - ScheduleTool checks operating hours, future time, trigger existence
 - TelegramTool checks for empty messages
 - GoogleCalendarTool handles API errors with consecutive failure tracking
+- GmailTool handles API errors with consecutive failure tracking
 
 Additional guardrails:
 - Wake-ups outside operating hours are rejected by ScheduleTool
@@ -269,7 +271,7 @@ The agent interacts with the world through tools:
 | **ScheduleTool** | Agent manages its own wake-up schedule | Built |
 | **TelegramTool** | Send messages to the user | Built |
 | **GoogleCalendarTool** | Read events from all visible calendars | Built |
-| **GmailTool** | Read/send email | Planned |
+| **GmailTool** | Read inbox, surface important emails | Built (read-only) |
 
 Adding a new tool: create a class implementing the `Tool` interface in
 `tools/`, register it in `tools/__init__.py`. No changes to the agent
@@ -282,25 +284,74 @@ personal, school, shared calendars, birthdays, etc. It detects new events,
 changed events, cancelled events, and imminent events (starting within 15
 minutes). Each event is tagged with which calendar it came from.
 
-### Setup
-
-1. Create a Google Cloud project and enable the Calendar API
-2. Create OAuth credentials and download the client secret JSON
-3. Run the auth flow once from the terminal:
-   ```bash
-   python -c "from google_auth import run_auth_flow; run_auth_flow('jo')"
-   ```
-4. See `GOOGLE_CALENDAR_SETUP.md` for detailed step-by-step instructions
-
-The agent automatically loads the calendar tool when credentials exist.
-No configuration needed — just run the auth flow and restart the service.
-
 ### Error resilience
 
 If the Google Calendar API starts failing, the agent tracks consecutive
 failures. After 3 failures, it tells you via Telegram. After 10, it asks
 you to re-authorize. Success resets the counter. The agent never silently
 goes blind.
+
+## Gmail integration
+
+The agent reads your inbox and surfaces emails that deserve your attention.
+It is not a second inbox — you check your own email. Jo's job is to catch
+the things you'd miss, forget about, or want to engage with sooner, and
+to contextualize them against what she knows about your life.
+
+### Three-layer filtering
+
+Email goes through three increasingly selective filters:
+
+**Layer 1: Gmail API query.** `category:primary is:unread newer_than:1d`
+runs on Google's servers. This eliminates newsletters, promotions, social
+notifications, and automated messages before anything is downloaded. About
+90% of email volume never leaves Google.
+
+**Layer 2: Python header filters.** Applied locally, zero LLM cost. Catches
+automated messages that Gmail miscategorized as Primary: mailing list
+headers (`List-Unsubscribe`, `List-Id`), bulk precedence, auto-submitted
+messages, and no-reply senders. Also filters out emails where you aren't
+in the To or CC fields (BCC'd mass sends). A recruiter's cold outreach
+passes. A Costco coupon does not.
+
+**Layer 3: Jo's judgment.** Emails that survive both filters appear as
+snippets in Jo's context (sender, subject, ~200 chars). Jo decides whether
+to message you — and when she does, she contextualizes rather than
+forwards. "John just emailed about reviewing your resume — this is the
+opportunity you were excited about last week" rather than "New email from
+John Smith, subject: Resume review."
+
+Jo loads behavioral guidelines (the "email skill file") only when there
+are emails to show. On cycles with no new email, the guidelines never
+enter the prompt — zero token cost.
+
+### Error resilience
+
+Gmail uses the same consecutive-failure tracking as the calendar tool.
+After 3 failures Jo tells you; after 10 she asks you to re-authorize.
+
+## Google API setup
+
+Both Calendar and Gmail use a shared OAuth2 credential. One auth flow
+grants access to both.
+
+### Setup
+
+1. Create a Google Cloud project
+2. Enable both the **Calendar API** and the **Gmail API**
+3. Create OAuth credentials and download the client secret JSON
+4. **Publish the OAuth consent screen** (APIs & Services → OAuth consent
+   screen → Publish). This prevents refresh tokens from expiring after
+   7 days. You don't need Google to review it for personal use.
+5. Run the auth flow once from the terminal:
+   ```bash
+   python -c "from google_auth import run_auth_flow; run_auth_flow('jo')"
+   ```
+6. See `GOOGLE_CALENDAR_SETUP.md` for detailed step-by-step instructions
+
+The agent automatically loads both tools when credentials exist. No
+additional configuration needed — just run the auth flow and restart
+the service.
 
 ## Memory system
 
@@ -404,11 +455,12 @@ purcival/
 │   ├── base.py          Tool and ToolMethod base classes
 │   ├── schedule_tool.py ScheduleTool — self-scheduling with internal validation
 │   ├── telegram_tool.py TelegramTool — Telegram send wrapper
-│   └── google_calendar.py GoogleCalendarTool — multi-calendar reader
+│   ├── google_calendar.py GoogleCalendarTool — multi-calendar reader
+│   └── gmail.py         GmailTool — three-layer filtered inbox reader
 ├── personas/            Personality definitions (markdown)
 ├── data/                Per-persona databases + shared user context (gitignored)
 ├── debug/               Prompt dumps from debug mode (gitignored)
-├── tests/               Test suite (70 tests)
+├── tests/               Test suite (133 tests)
 ├── google_client_secret.json  Google OAuth client secret (gitignored)
 ├── purcival@.service    Systemd template for background services
 ├── requirements.txt     Python dependencies
@@ -485,7 +537,11 @@ TELEGRAM_TOKEN_JO=
 - [x] Calendar error resilience — consecutive failure tracking with user notification
 - [x] All-day event support — shown separately, no imminent logic
 - [x] Calendar list caching with 24-hour TTL
-- [ ] Gmail integration (read-only)
+- [x] Gmail integration (read-only, three-layer filtering)
+- [x] Email behavioral guidelines loaded by tool (skill-file pattern)
+- [x] Email header filters — List-Unsubscribe, no-reply, precedence, direct addressing
+- [x] Email error resilience — consecutive failure tracking
+- [ ] Gmail write access — draft replies, send email (requires gmail.compose scope)
 - [ ] Execute-tier approval flow via Telegram
 - [ ] Large local model for async agent reasoning
 
@@ -496,6 +552,6 @@ TELEGRAM_TOKEN_JO=
 - For local inference: Ollama + a GPU (tested on RTX 3060 12GB)
 - For embeddings: `ollama pull nomic-embed-text`
 - For Claude: an Anthropic API key with credits
-- For Google Calendar: Google Cloud project with Calendar API enabled
-  (see GOOGLE_CALENDAR_SETUP.md)
+- For Google Calendar and Gmail: Google Cloud project with Calendar API
+  and Gmail API enabled (see GOOGLE_CALENDAR_SETUP.md)
 - Telegram account and bot tokens from @BotFather
