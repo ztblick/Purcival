@@ -43,6 +43,35 @@ console = Console(theme=_theme)
 DEBUG_DIR = Path(__file__).parent / "debug"
 
 
+def _first_sentence(text: str, max_len: int = 100) -> str:
+    """
+    Extract the first sentence from a block of text for display.
+
+    Takes everything up to the first period followed by a space or
+    newline (a sentence boundary), or the first newline if no period
+    is found. Falls back to character truncation if the first sentence
+    is still too long.
+    """
+    # Take the first line first — narrative often starts with a summary line
+    first_line = text.split("\n")[0].strip()
+
+    # If the first line is short enough, use it
+    if len(first_line) <= max_len:
+        return first_line
+
+    # Try to find a sentence boundary within the limit
+    truncated = first_line[:max_len]
+    # Look for the last period followed by a space within the limit
+    for i in range(len(truncated) - 1, 0, -1):
+        if truncated[i] == "." and (i + 1 >= len(truncated) or truncated[i + 1] == " "):
+            return truncated[:i + 1]
+
+    # No clean break — truncate at word boundary
+    if " " in truncated:
+        return truncated[:truncated.rfind(" ")] + "..."
+    return truncated + "..."
+
+
 def _dump_prompt(
     system_prompt: str,
     messages: list[dict],
@@ -365,7 +394,10 @@ def _print_banner(provider: str, persona_name: str, memory: PersonaMemory, debug
     narrative = memory.get_narrative()
     agent_status = ""
     if narrative:
-        snippet = narrative[:80] + "..." if len(narrative) > 80 else narrative
+        # Show just the first sentence — the narrative often contains
+        # multi-line detail (calendar context, email summaries) that
+        # looks bad truncated in the banner.
+        snippet = _first_sentence(narrative, max_len=100)
         agent_status = f"\nAgent:    [status]{snippet}[/status]"
 
     banner = (
@@ -486,7 +518,7 @@ def chat_loop(provider: str, persona_name: str, debug: bool = False):
             console.print(f"  [status]Triggers:[/status]   {len(active_triggers)} pending")
 
             if narrative:
-                snippet = narrative[:120] + "..." if len(narrative) > 120 else narrative
+                snippet = _first_sentence(narrative, max_len=140)
                 console.print(f"  [status]Agent:[/status]      {snippet}")
 
             console.print(f"  [status]Debug:[/status]      {'ON' if debug else 'off'}\n")
