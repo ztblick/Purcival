@@ -920,63 +920,38 @@ Reason:
   state. Editable or multiple step categories need a design update and schema
   decision before implementation.
 
-### Phase 5 adjunct - Step category editing design
+### Phase 5 adjunct - Step categories
 
-Status: proposed; awaiting Zach review before implementation.
+Decision: no editable step categories in v1.
 
-Decision:
+The hierarchy remains:
 
-- Keep categories owned by goals in v1.
-- Do not add `steps.category`, a `categories` table, or a step/category
-  many-to-many table for this adjunct.
-- Treat "change this step's category" as "move this step to another goal";
-  the visible category tag then changes because the step inherits the target
-  goal's category.
+```text
+Category -> Goal -> Step
+```
+
+Each goal belongs to one category. Each step belongs to one goal. A step's
+visible category is inherited from its parent goal and is display-only.
+
+Do not implement:
+
+- Clickable step-category reassignment.
+- `steps.category`.
+- A `categories` table.
+- A step/category join table.
+- A "move this step to another goal" flow as a substitute for category editing.
 
 Rationale:
 
-- The current product model is explicitly `category -> goal -> step`. A step
-  with an independent category would create two competing parents: its actual
-  goal and its displayed category.
-- The common v1 correction is likely "this step belongs under a different
-  goal," not "this step needs a second taxonomy." Moving the step handles that
-  without a migration.
-- A separate categories table or many-to-many join is real taxonomy work. It
-  should wait until Zach actually needs cross-goal categorization, labels, or
-  reporting by multiple dimensions.
+- Editable step categories are more trouble than they are worth for v1.
+- Adding a second category concept would weaken the product model and make
+  feedback/accountability summaries harder to reason about.
+- Moving steps between goals is also broader than a category tweak; it changes
+  ownership, context, and the meaning of the scoped thread.
 
-Implementation shape after approval:
-
-- Add `SharedGoalStore.move_step_to_goal(step_id, goal_id)`.
-- Validate that both rows exist and the target goal is `active`.
-- Update only `steps.goal_id`, `updated_at`, and `last_touched_at`.
-- Preserve the step id, status, feedback, and scoped chat history. Existing
-  `scope_type='step'` messages remain attached to the same step id; future
-  entity context reflects the new parent goal.
-- Make the category tag on step cards a compact move affordance, but label the
-  UI around goals rather than pretending categories are independently editable.
-- The picker should list active goals grouped by category, with the current
-  goal disabled.
-- After a move, refresh the steps strip and, if the focused chat is open for
-  that step, refresh the focused context beside the composer.
-
-Rejected alternatives:
-
-- `steps.category`: easy migration, bad model. It allows a step under a
-  Health goal to display as Money with no clear source of truth.
-- `categories` table only: useful later for category metadata, but it does not
-  answer whether steps can have categories independent from goals.
-- Step/category many-to-many: powerful but premature. It turns simple goal
-  tracking into tagging infrastructure and complicates feedback summaries.
-
-Acceptance after implementation:
-
-- Moving a suggested or accepted step to another active goal updates the
-  inherited category tag immediately without changing the step status.
-- Scoped step chat remains attached to the same step after the move.
-- Moving to a paused, archived, completed, abandoned, or nonexistent goal is
-  rejected.
-- Dashboard tests cover the HTMX move flow and entity-context refresh.
+Future work can revisit this only if Zach explicitly asks for richer taxonomy
+or step re-parenting. Until then, category tags on step cards are labels, not
+controls.
 
 ### Phase 5 - Agent suggestion generation
 

@@ -10,8 +10,8 @@ agent sessions. Read it in full each session. Update sections marked
 
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
-**Phase:** 5 adjunct — Step category editing design (awaiting Zach review)
-**Status:** Phase 5 agent suggestion generation is complete. The remaining Phase 5 adjunct item is editable step categories. Because steps currently inherit category through their parent goal, the proposed design treats category changes as moving a step to another active goal; see `Design/dashboard_goals_design.md` → "Phase 5 adjunct - Step category editing design." No production code should be written for this adjunct until Zach approves or redirects the design.
+**Phase:** Pre-Phase 6 cleanup — dashboard chat control-tag leak
+**Status:** Zach rejected editable step categories for v1: each step belongs to one goal, each goal belongs to one category, and step category tags are display-only inherited labels. Phase 5 is otherwise complete. One issue demands attention before Phase 6: focused dashboard chat can stream raw `<schedule_updates>` control tags before the saved message is stripped, and the stripped schedule action is not applied. Fix that chat plumbing before adding Phase 6 chat-based accountability actions.
 
 ---
 
@@ -118,12 +118,11 @@ Acceptance: a real planning cycle produces sensible suggestions visible on the d
   scoped messages when Zach scrolls upward.
 - The scoped goal/step context now sits directly beside the bottom text input,
   roughly 25% context and 75% input row, to reclaim vertical chat space.
-- Clickable step-category reassignment is now design-gated in
-  `Design/dashboard_goals_design.md`: the proposed v1 behavior is moving the
-  step to another active goal, preserving goal-owned categories.
-- Do not add an independent step category field, categories table, or
-  many-to-many step/category join table unless Zach rejects the proposed
-  goal-move design.
+- Step category tags are display-only. Do not implement clickable
+  step-category reassignment in v1.
+- Do not add an independent step category field, categories table,
+  many-to-many step/category join table, or step re-parenting flow unless Zach
+  explicitly reopens richer taxonomy work later.
 
 **Phase 6 — Accountability**
 
@@ -149,13 +148,7 @@ answer in the design doc, Zach reviews.)
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-- **Phase 5 adjunct / step category editing** — approve or reject the proposed
-  v1 behavior: clicking a step category tag moves the step to another active
-  goal, so the category changes through the existing `category -> goal -> step`
-  hierarchy. Rationale: this preserves the locked data model and avoids adding
-  premature taxonomy infrastructure. Design path:
-  `Design/dashboard_goals_design.md` → "Phase 5 adjunct - Step category editing
-  design."
+(None pending. The step-category decision is recorded; pre-Phase 6 cleanup is an implementation task, not a design decision.)
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -170,6 +163,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-17 - Goals dashboard step-category decision - recorded Zach's decision that step category tags are display-only inherited labels; no editable step categories, independent step category field, category table, join table, or step re-parenting flow in v1 - committed.
 - 2026-05-17 - Goals dashboard step-category design - proposed treating editable step categories as moving a step to another active goal, preserving goal-owned categories and deferring independent step taxonomy - awaiting review.
 - 2026-05-17 - Goals dashboard Phase 5 - added GoalTool and SuggestionTool, registered them with the agent loop, planning-gated suggestion generation, and verified a planning cycle can create dashboard-visible suggested steps - committed.
 - 2026-05-17 - Goals dashboard bottom input polish - moved the scoped goal/step context directly beside the bottom text input at roughly 25/75 width so the chat history can show more messages - committed.
@@ -219,6 +213,7 @@ Append entries; never edit prior ones.
 - **2026-05-17 — Goals dashboard is chat-first.** Zach clarified that chatting with Jo is the main way goals, suggestions, and steps should change. Dashboard goal/step controls should stay limited; manual editing is not the product center.
 - **2026-05-17 — Goals dashboard feedback is accept/reject only.** Zach clarified that ✓ means the suggestion was good enough to accept, ✕ means it was bad enough to reject, and Jo should infer why from context rather than asking for thumbs or rejection reasons.
 - **2026-05-17 - Step category editing is design-gated.** Step cards may display the inherited goal category immediately, but changing a step's category or assigning multiple categories affects the current `category -> goal -> step` model and needs a design update before production code.
+- **2026-05-17 - Step category tags are display-only in v1.** Zach rejected editable step categories as more trouble than they are worth. Each step belongs to one goal, each goal belongs to one category, and a step's category tag is inherited from its parent goal. Do not add independent step categories, category tables, join tables, or step re-parenting flows in v1.
 
 ---
 
@@ -228,6 +223,7 @@ Append entries; never edit prior ones.
 
 - **Trigger-deletion bug.** Some agent-scheduled triggers have been found deleted between cycles with no corresponding cancel commands in the reasoning log. Root cause unknown. Investigation, not a quick patch.
 - **Telegram `/status` model display drift.** `telegram_bot.py` still references removed `config.CLAUDE_MODEL` / `config.OLLAMA_MODEL` names after the per-task provider refactor. Fix later by routing status display through the same task-model lookup used by the CLI.
+- **Dashboard focused chat leaks schedule update control tags while streaming.** The SSE stream sends raw assistant chunks before `strip_schedule_updates()` runs, so `<schedule_updates>...</schedule_updates>` can briefly appear in the UI; the persisted message is clean after reload. The dashboard also ignores the stripped actions instead of applying or explicitly rejecting them. Fix before Phase 6 because chat-based accountability actions will rely on clean control/action handling.
 
 ### Deferred work (related to current and recent projects)
 
@@ -236,8 +232,7 @@ Append entries; never edit prior ones.
 - **Web search tool** for the agent — would unlock proactive suggestions like "Yoga6 has a 6pm class today, want me to put it on your calendar?" Needs its own design phase: generic URL fetch + extraction vs. search engine API vs. browser automation; rate limiting; caching; cost; trust boundary for arbitrary URL fetching.
 - **AI-proposed goals.** Right now goals are user-created. Purcival proposing goals from observed conversation patterns is a future feature; moves the trust boundary, defer.
 - **Recurring steps.** Currently all steps are one-shot. Recurring goals produce fresh steps per planning cycle.
-- **Editable step categories.** Step cards can show the inherited goal category, but a clickable category menu needs a design pass because steps currently inherit category through their parent goal.
-- **Multiple categories per step.** Likely requires a `categories` table plus a step/category join table or another explicit category ownership decision; do not bolt this onto `steps.goal_id`.
+- **Richer goal/step taxonomy.** Deferred unless Zach explicitly reopens it. For v1, each step belongs to one goal, each goal belongs to one category, and step category tags are display-only inherited labels.
 
 ### Other deferred work
 
