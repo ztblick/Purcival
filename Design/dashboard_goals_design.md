@@ -1,6 +1,6 @@
 # Goals Dashboard Design
 
-**Status:** Phase 2 chat-first skeleton polished; visual review pending
+**Status:** Phase 2 complete; Phase 3 ready for next development cycle
 **Date:** 2026-05-17
 **Phase:** 2 - Dashboard skeleton
 **Scope:** shared goal state, scoped conversations, dashboard UI, and agent integration
@@ -791,6 +791,10 @@ goal/step editing controls should stay minimal because Jo is expected to create
 and revise goals and steps through conversation.
 
 Phase 2 acceptance is screenshot-driven. Do not bury visual decisions in code without showing Zach.
+
+Phase 2 was approved by Zach on 2026-05-17 after the compact, chat-first
+dashboard polish. Phase 3 should begin in the next development cycle; no Phase
+3 behavior has been implemented yet.
 
 ---
 

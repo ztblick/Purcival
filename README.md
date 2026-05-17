@@ -216,7 +216,7 @@ by git.
 
 ## Goals Dashboard
 
-Current phase: Phase 2 dashboard skeleton implemented; visual review pending.
+Current phase: Phase 2 dashboard skeleton complete; Phase 3 ready for the next development cycle.
 
 Canonical design doc:
 
@@ -234,8 +234,9 @@ Planned implementation phases:
 - Phase 6: accountability.
 - Phase 7: feedback-loop polish.
 
-Phase 1 data storage and scoped memory are implemented. Phase 2 adds the
-seed-backed FastAPI/Jinja dashboard skeleton and screenshot workflow.
+Phase 1 data storage and scoped memory are implemented. Phase 2 added the
+seed-backed FastAPI/Jinja dashboard skeleton and screenshot workflow. Phase 3
+starts real goal/step rendering and accept/reject flows.
 
 Run the local dashboard:
 
@@ -297,7 +298,7 @@ services are available.
 
 ## Roadmap
 
-- Goals dashboard Phase 2 skeleton and local UI.
+- Goals dashboard Phase 3 real data display and accept/reject flows.
 - Scoped Jo chats for goals and steps.
 - Agent-generated suggestions tied to active goals.
 - Accountability context for accepted steps.
