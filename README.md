@@ -3,17 +3,19 @@
 A personal AI assistant built from scratch, with help from Claude, named after our cat.
 
 Purcival runs on your own hardware, talks to you via Telegram on your phone,
-and lets you choose between cloud AI (Claude) and a local model running on
-your GPU. Each persona is a separate Telegram bot with its own personality,
-its own persistent memory, and its own conversation history. Conversations
-survive restarts, reboots, and crashes. Older conversations are automatically
-summarized and retrieved by semantic similarity when they become relevant again.
+and lets you choose between three LLM providers: Anthropic's Claude, OpenAI's
+ChatGPT, or a local model running on your GPU. Each persona is a separate
+Telegram bot with its own personality, its own persistent memory, and its own
+conversation history. Conversations survive restarts, reboots, and crashes.
+Older conversations are automatically summarized and retrieved by semantic
+similarity when they become relevant again.
 
 The primary persona (Jo) is a **self-scheduling autonomous agent** that
 plans its own day, manages its own wake-up schedule, reads your Google
 Calendar and Gmail inbox, and sends proactive messages via Telegram. The
-agent reasons about what to do using Claude, schedules targeted wake-ups
-with specific purposes, and adjusts its plan when your situation changes.
+agent reasons about what to do using its configured reasoning provider,
+schedules targeted wake-ups with specific purposes, and adjusts its plan
+when your situation changes.
 
 ## How it works
 
@@ -33,15 +35,16 @@ Your phone (Telegram)                         Your Linux box
     │            │   ├─ Scheduled plan       │←── memory.db (agent wake-ups)
     │            │   ├─ Relevant summaries   │←── memory.db (semantic search)
     │            │   └─ Recent messages      │←── memory.db (verbatim history)
-    │            │ Call brain.ask()        ──┼──→ Ollama (local GPU)
-    │            │       or                ──┼──→ Claude API (cloud)
+    │            │ Call brain.ask(task=…)  ──┼──→ Ollama   (local GPU)
+    │            │                          ──┼──→ Claude   (Anthropic API)
+    │            │                          ──┼──→ ChatGPT  (OpenAI API)
     │            │ Strip <schedule_updates>  │     │
     │            │ Persist response          │──→ memory.db
     │            │ Apply schedule updates    │     │
     │            │ Check if summarization    │     │
     │            │   needed → if so:         │     │
-    │            │   Summarize old messages  │──→ Claude API (always)
-    │            │   Embed summary           │──→ nomic-embed-text
+    │            │   Summarize old messages  │──→ summary-task provider
+    │            │   Embed summary           │──→ nomic-embed-text (Ollama)
     │            │   Store summary + vector  │──→ memory.db
     │            │                           │     │
     │            │ Agent scheduler:          │     │
@@ -50,7 +53,7 @@ Your phone (Telegram)                         Your Linux box
     │            │     ├─ Perceive (tools)   │     │
     │            │     │  ├─ Google Calendar ─┼──→ Google Calendar API
     │            │     │  └─ Gmail ───────────┼──→ Gmail API
-    │            │     ├─ Reason (Claude) ───┼──→ Claude API
+    │            │     ├─ Reason (LLM) ──────┼──→ reasoning-task provider
     │            │     ├─ Parse JSON actions  │     │
     │            │     ├─ Validate + act     │     │
     │            │     └─ Update narrative   │──→ memory.db
@@ -73,7 +76,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # Pull the local models
-ollama pull mistral-small3.2    # main conversation model
+ollama pull phi4                # main local conversation model
 ollama pull nomic-embed-text    # embedding model for memory retrieval
 
 cp .env.example .env
@@ -87,13 +90,14 @@ cp .env.example .env
 ```bash
 python main.py                          # pick persona interactively
 python main.py --persona jo             # jump straight in
-python main.py --provider claude        # use Claude instead of Ollama
+python main.py --provider claude        # use Claude instead of the default
+python main.py --provider chatgpt       # use ChatGPT
 python main.py --debug                  # dump full prompts to debug/
 python main.py -m "hello" --persona ada # single message
 ```
 
-Terminal commands: `/persona`, `/claude`, `/ollama`, `/schedule`, `/status`,
-`/debug`, `clear`, `quit`
+Terminal commands: `/persona`, `/claude`, `/chatgpt`, `/ollama`, `/schedule`,
+`/status`, `/debug`, `clear`, `quit`
 
 The terminal interface shows a spinner when summarization is running
 ("Committing conversation to memory...") and allows longer, more detailed
@@ -144,9 +148,9 @@ to prevent accidental data loss — use the terminal interface to clear history.
 
 Useful commands:
 ```bash
-journalctl -u purcival@jo -f     # live logs
+journalctl -u purcival@jo -f        # live logs
 sudo systemctl restart purcival@jo  # restart after code changes
-sudo systemctl status 'purcival@*'     # status of all personas
+sudo systemctl status 'purcival@*'  # status of all personas
 ```
 
 Note: changes to Python files require a service restart to take effect.
@@ -356,9 +360,9 @@ the service.
 ## Memory system
 
 Purcival uses a three-tier persistent memory system. Every conversation is
-stored, older conversations are automatically compressed into summaries
-(using Claude for quality), and relevant summaries are retrieved via semantic
-search to give each persona long-term memory.
+stored, older conversations are automatically compressed into summaries,
+and relevant summaries are retrieved via semantic search to give each
+persona long-term memory.
 
 ### Data layout
 
@@ -388,10 +392,10 @@ maintained. Read by all personas. Contains background information that
 doesn't change often: family, career, values, interests.
 
 **Tier 2: Conversation summaries** (SQLite `summaries` table) — automatically
-generated condensations of older conversations using Claude. Each summary is
-stored with a vector embedding for semantic search. When a new message
-arrives, the system embeds the message, finds the most similar stored
-summaries, and includes them in the prompt.
+generated condensations of older conversations using the configured
+summary-task provider. Each summary is stored with a vector embedding for
+semantic search. When a new message arrives, the system embeds the message,
+finds the most similar stored summaries, and includes them in the prompt.
 
 **Tier 3: Verbatim messages** (SQLite `messages` table) — the full record
 of every message exchanged, timestamped in local time. Recent messages are
@@ -439,16 +443,16 @@ purcival/
 ├── main.py              Terminal UI — persona picker, chat loop, /schedule
 ├── run_telegram.py      Telegram entry point — one persona per process
 ├── telegram_bot.py      PersonaBot class — messaging, agent scheduler
-├── brain.py             LLM interface — routes to Claude or Ollama
+├── brain.py             LLM interface — routes to Claude, ChatGPT, or Ollama
 ├── context.py           Context assembly — builds full prompts from all sources
 ├── memory.py            Persistent storage — messages, summaries, triggers, agent state
 ├── embeddings.py        Vector embeddings — generates embeddings via Ollama
-├── summarizer.py        Summarization engine — compresses old conversations via Claude
+├── summarizer.py        Summarization engine — compresses old conversations
 ├── proactive.py         Agent bootstrap and scheduler
 ├── agent.py             Agent cycle — perceive, reason, validate, act (JSON actions)
 ├── google_auth.py       Google OAuth2 flow + credential management
 ├── tokens.py            Token counting — abstract interface for budget enforcement
-├── config.py            Loads settings from .env
+├── config.py            Loads settings from .env (per-task models per provider)
 ├── personas.py          Discovers and loads persona files
 ├── tools/
 │   ├── __init__.py      Tool registry and factory
@@ -460,7 +464,8 @@ purcival/
 ├── personas/            Personality definitions (markdown)
 ├── data/                Per-persona databases + shared user context (gitignored)
 ├── debug/               Prompt dumps from debug mode (gitignored)
-├── tests/               Test suite (133 tests)
+├── docs/                Design docs (openai integration, dashboard goals, etc.)
+├── tests/               Test suite (~150 tests)
 ├── google_client_secret.json  Google OAuth client secret (gitignored)
 ├── purcival@.service    Systemd template for background services
 ├── requirements.txt     Python dependencies
@@ -468,42 +473,85 @@ purcival/
 └── .gitignore           Keeps secrets, data, debug dumps, and artifacts out of git
 ```
 
-## Dual-model architecture
+## Multi-provider architecture
 
-**Claude** (via Anthropic API) — highest quality, costs per token, requires
-internet. Switch to it with `/provider claude` in Telegram. Also used for
-summarization and agent reasoning regardless of active chat provider.
+Purcival currently supports three LLM providers, with **per-call-site model
+selection** so the right model is used for each task without paying for
+overkill where it's not needed.
 
-**Ollama** (local inference) — free, private, runs on your GPU. Purcival
-currently runs Mistral Small 3.2 on an RTX 3060 (12GB VRAM). A separate
-embedding model (`nomic-embed-text`, ~270MB) runs on CPU for memory
-retrieval without competing for GPU VRAM.
+**Claude** (via Anthropic API) — Anthropic's frontier family. Strong
+reasoning, careful style, good tool use. Switch to it with `/claude` in the
+terminal. Available models include the Sonnet, Opus, and Haiku families.
 
-Both use the same message format. The brain module abstracts the provider
-so nothing else in the app knows which model is responding.
+**ChatGPT** (via OpenAI API) — OpenAI's GPT-5 family. Switch to it with
+`/chatgpt`. Note: GPT-5 models use `max_completion_tokens` rather than
+`max_tokens`; Purcival's `brain.ask()` translates internally.
+
+**Ollama** (local inference) — free, private, runs on your GPU. Defaults to
+Phi-4 on an RTX 3060 (12GB VRAM). A separate embedding model
+(`nomic-embed-text`, ~270MB) runs on CPU for memory retrieval without
+competing for GPU VRAM.
+
+### Per-task model selection
+
+Each provider has three configurable models, one per call site:
+
+- **chat** — interactive conversation, optimized for responsiveness
+- **summary** — conversation compaction, optimized for cheap good-enough quality
+- **reasoning** — the Stage 5 agent loop, where multi-step decisions are made
+
+A single `DEFAULT_PROVIDER` selects the active provider family for all three
+call sites. Per-task models within a family are configured via env vars (see
+Configuration below). Call sites pass `task="chat" | "summary" | "reasoning"`
+to `brain.ask()`, which looks up the right model.
+
+If the configured provider is unconfigured (e.g., missing API key), `brain.ask()`
+falls back to Ollama with a logged warning rather than failing hard.
 
 ## Configuration
 
 All settings live in `.env` (never committed to git):
 
 ```bash
+# --- Provider (single lever) ---
 DEFAULT_PROVIDER=ollama
-ANTHROPIC_API_KEY=your-key-here
-CLAUDE_MODEL=claude-sonnet-4-6
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=mistral-small3.2
 DEFAULT_PERSONA=default
+
+# --- Claude (Anthropic) ---
+ANTHROPIC_API_KEY=your-anthropic-key
+CLAUDE_CHAT_MODEL=claude-sonnet-4-6
+CLAUDE_SUMMARY_MODEL=claude-haiku-4-5-20251001
+CLAUDE_REASONING_MODEL=claude-opus-4-7
+
+# --- ChatGPT (OpenAI) ---
+OPENAI_API_KEY=your-openai-key
+CHATGPT_CHAT_MODEL=gpt-5.4-mini
+CHATGPT_SUMMARY_MODEL=gpt-5.4-nano
+CHATGPT_REASONING_MODEL=gpt-5.5
+
+# --- Ollama (local) ---
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_CHAT_MODEL=phi4
+OLLAMA_SUMMARY_MODEL=phi4
+OLLAMA_REASONING_MODEL=phi4
+
+# --- Telegram ---
 TELEGRAM_ALLOWED_USER_ID=
 TELEGRAM_CHAT_ID=
 TELEGRAM_TOKEN_ADA=
 TELEGRAM_TOKEN_JO=
 ```
 
+Only the provider you actually use needs its API key set. Missing keys for
+unused providers don't cause errors.
+
 ## Roadmap
 
 - [x] Claude API integration
 - [x] Local inference via Ollama
-- [x] Dual-model routing with mid-conversation switching
+- [x] OpenAI / ChatGPT integration — three providers with fallback to Ollama
+- [x] Per-task model selection (chat / summary / reasoning, configurable per provider)
+- [x] Dual-provider routing with mid-conversation switching
 - [x] Rich terminal UI with markdown rendering
 - [x] Persona system — multiple personalities from markdown files
 - [x] Telegram bots — one per persona, chat from your phone
@@ -512,7 +560,7 @@ TELEGRAM_TOKEN_JO=
 - [x] Shared user context (`user_context.md`)
 - [x] Context assembly — full prompts from persona + context + history
 - [x] Embedding infrastructure — vector similarity via nomic-embed-text
-- [x] Conversation summarization — via Claude for quality
+- [x] Conversation summarization — via configurable summary provider
 - [x] Semantic retrieval — surface relevant past conversations
 - [x] Timestamps — local time on all messages and summaries
 - [x] Device-aware responses — concise on Telegram, detailed in terminal
@@ -528,9 +576,9 @@ TELEGRAM_TOKEN_JO=
 - [x] Two-layer validation — generic gate in agent loop + tool-specific validation
 - [x] Narrative state — LLM maintains prose understanding across cycles
 - [x] Reasoning log — full traces for debugging (7-day retention)
-- [x] User message plan updates — <schedule_updates> with JSON format
+- [x] User message plan updates — `<schedule_updates>` with JSON format
 - [x] Chat ID persistence — survives service restarts
-- [x] /schedule preserves targeted wake-ups
+- [x] `/schedule` preserves targeted wake-ups
 - [x] Time awareness — agent knows current time and trigger fire time
 - [x] Google Calendar integration (read-only, multi-calendar)
 - [x] Calendar event diffing — new, changed, cancelled, imminent detection
@@ -541,17 +589,22 @@ TELEGRAM_TOKEN_JO=
 - [x] Email behavioral guidelines loaded by tool (skill-file pattern)
 - [x] Email header filters — List-Unsubscribe, no-reply, precedence, direct addressing
 - [x] Email error resilience — consecutive failure tracking
+- [ ] **Goals dashboard — local web app for goal/step tracking with proactive suggestions (in design)**
+- [ ] OpenAI o-series reasoning model support (o3, o4-mini)
+- [ ] Mixing providers across call sites (e.g., Claude reasoning + ChatGPT chat)
+- [ ] Web search tool — proactive external info gathering
 - [ ] Gmail write access — draft replies, send email (requires gmail.compose scope)
 - [ ] Execute-tier approval flow via Telegram
 - [ ] Large local model for async agent reasoning
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - Linux with systemd (for background services)
 - For local inference: Ollama + a GPU (tested on RTX 3060 12GB)
 - For embeddings: `ollama pull nomic-embed-text`
 - For Claude: an Anthropic API key with credits
+- For ChatGPT: an OpenAI API key with credits
 - For Google Calendar and Gmail: Google Cloud project with Calendar API
   and Gmail API enabled (see GOOGLE_CALENDAR_SETUP.md)
 - Telegram account and bot tokens from @BotFather
