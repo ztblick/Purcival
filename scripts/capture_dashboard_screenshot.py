@@ -1,4 +1,4 @@
-"""Capture a Phase 2 dashboard screenshot with Playwright."""
+"""Capture Phase 3 dashboard screenshots with Playwright."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import requests
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 DEFAULT_OUTPUT_DIR = ROOT / "dashboard" / "screenshots"
 VIEWPORTS = {
     "desktop": {"width": 1440, "height": 1000},
@@ -55,8 +56,33 @@ def capture(url: str, output: Path, viewport: dict[str, int]):
         browser.close()
 
 
+def prepare_phase3_demo_data(db_path: Path):
+    from goals import SharedGoalStore
+
+    store = SharedGoalStore(db_path)
+    steps = store.list_steps(status="suggested")
+    yoga_step = next(
+        (
+            step for step in steps
+            if step["title"] == "Go to Yoga6 in Palo Alto at 12pm"
+        ),
+        None,
+    )
+    lucid_step = next(
+        (
+            step for step in steps
+            if step["title"] == "Continue learning about LucidAI and their tech"
+        ),
+        None,
+    )
+    if yoga_step:
+        store.accept_step(yoga_step["id"])
+    if lucid_step:
+        store.record_step_feedback(lucid_step["id"], "thumbs_down")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Capture the Phase 2 dashboard screenshot.")
+    parser = argparse.ArgumentParser(description="Capture Phase 3 dashboard screenshots.")
     parser.add_argument(
         "--output",
         type=Path,
@@ -86,6 +112,7 @@ def main():
             text=True,
         )
         sys.stdout.write(seed_result.stdout)
+        prepare_phase3_demo_data(db_path)
 
         port = find_free_port()
         url = f"http://127.0.0.1:{port}/"
@@ -113,7 +140,7 @@ def main():
                 print(f"Captured dashboard screenshot: {args.output}")
             else:
                 for name, viewport in VIEWPORTS.items():
-                    output = args.output_dir / f"phase2-dashboard-{name}.png"
+                    output = args.output_dir / f"phase3-dashboard-{name}.png"
                     capture(url, output, viewport)
                     print(f"Captured dashboard screenshot: {output}")
         finally:

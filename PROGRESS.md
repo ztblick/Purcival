@@ -10,8 +10,8 @@ agent sessions. Read it in full each session. Update sections marked
 
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
-**Phase:** 3 — Goal and step display, accept/reject (ready for next development cycle)
-**Status:** Phase 2 complete and approved by Zach. Phase 3 can be started by the next development cycle; no Phase 3 work has begun.
+**Phase:** 4 — Chat-on-step and chat-on-goal (ready for next development cycle)
+**Status:** Phase 3 complete. The dashboard renders real suggested and accepted steps from `data/user.db`, captures accept/reject/thumbs feedback without full-page reloads, and has route plus Playwright coverage for the accept/reject flow.
 
 ---
 
@@ -150,6 +150,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-17 — Goals dashboard Phase 3 — implemented database-backed suggested/accepted step rendering, accept/reject and feedback endpoints, rejection reasons, thumbs feedback, refreshed Phase 3 screenshots, and full pytest passing — committed.
 - 2026-05-17 — Goals dashboard Phase 2 completion check — confirmed local dashboard loads, desktop/mobile screenshots are committed, Zach approved the visual identity, full pytest passes, and Phase 3 is ready for the next development cycle — committed.
 - 2026-05-17 — Goals dashboard Phase 2 compact rail polish — merged the title and goals rail, made goals smaller than steps, removed step details/counts from goal cards, reduced step cards to concise prompts, refreshed screenshots, and kept dashboard tests passing — caf6fd9.
 - 2026-05-17 — Goals dashboard Phase 2 chat-first polish — changed the motivational title to once-per-day selection, removed visible seed-source tags and manual step buttons, enlarged the Jo chat workspace, moved steps into a secondary context rail, refreshed screenshots, and kept dashboard tests passing — 5cad0b9.

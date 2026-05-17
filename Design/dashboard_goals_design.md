@@ -1,8 +1,8 @@
 # Goals Dashboard Design
 
-**Status:** Phase 2 complete; Phase 3 ready for next development cycle
+**Status:** Phase 3 complete; Phase 4 ready for next development cycle
 **Date:** 2026-05-17
-**Phase:** 2 - Dashboard skeleton
+**Phase:** 3 - Real goal and step interactions
 **Scope:** shared goal state, scoped conversations, dashboard UI, and agent integration
 
 ---
@@ -793,8 +793,11 @@ and revise goals and steps through conversation.
 Phase 2 acceptance is screenshot-driven. Do not bury visual decisions in code without showing Zach.
 
 Phase 2 was approved by Zach on 2026-05-17 after the compact, chat-first
-dashboard polish. Phase 3 should begin in the next development cycle; no Phase
-3 behavior has been implemented yet.
+dashboard polish. Phase 3 is complete: suggested and accepted steps render from
+`data/user.db`, accept/reject and feedback posts update the steps panel without
+a full-page reload, rejection reasons persist to `step_feedback`, thumbs
+feedback is captured, and Phase 3 screenshots plus a Playwright accept/reject
+flow cover the behavior. Phase 4 should begin in the next development cycle.
 
 ---
 
@@ -844,7 +847,7 @@ Acceptance:
 
 ### Phase 3 - Real goal and step interactions
 
-Implement:
+Implemented:
 
 - Render real goals and steps from `data/user.db`.
 - Accept/reject suggested steps.
@@ -853,7 +856,7 @@ Implement:
 - Display accepted steps distinctly.
 - HTMX partial updates without full reload.
 
-Acceptance:
+Acceptance met:
 
 - Playwright accept/reject test.
 - Screenshot updated.

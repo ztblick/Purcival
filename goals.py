@@ -367,6 +367,43 @@ class SharedGoalStore:
         finally:
             conn.close()
 
+    def accept_step(self, step_id: int) -> bool:
+        """Mark a suggested step accepted."""
+        step = self.get_step(step_id)
+        if step is None:
+            return False
+        if step["status"] == "accepted":
+            return True
+        if step["status"] != "suggested":
+            raise ValueError("Only suggested steps can be accepted")
+        return self.update_step_status(step_id, "accepted")
+
+    def reject_step(self, step_id: int, reason: str | None = None) -> bool:
+        """Mark a suggested step rejected and optionally capture the reason."""
+        step = self.get_step(step_id)
+        if step is None:
+            return False
+        if step["status"] not in {"suggested", "rejected"}:
+            raise ValueError("Only suggested steps can be rejected")
+        if step["status"] == "rejected":
+            if reason and reason.strip():
+                self.add_step_feedback(step_id, "rejection_reason", reason.strip())
+            return True
+        updated = self.update_step_status(step_id, "rejected")
+        if updated and reason and reason.strip():
+            self.add_step_feedback(step_id, "rejection_reason", reason.strip())
+        return updated
+
+    def record_step_feedback(
+        self,
+        step_id: int,
+        kind: str,
+        value: str | None = None,
+    ) -> int:
+        """Record UI feedback for a step."""
+        cleaned_value = value.strip() if value and value.strip() else None
+        return self.add_step_feedback(step_id, kind, cleaned_value)
+
     def add_step_feedback(
         self,
         step_id: int,

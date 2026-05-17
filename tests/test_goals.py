@@ -71,6 +71,31 @@ def test_step_crud_status_timestamps_and_feedback(tmp_path):
     assert feedback[1]["value"] == "Good because it has a concrete time."
 
 
+def test_accept_reject_and_feedback_helpers(tmp_path):
+    store = make_store(tmp_path)
+    goal_id = store.create_goal("career", "Learn more about AI safety")
+    accepted_id = store.create_step(goal_id, "Read one AI safety paper")
+    rejected_id = store.create_step(goal_id, "Spend all weekend on AI safety")
+
+    assert store.accept_step(accepted_id) is True
+    assert store.get_step(accepted_id)["status"] == "accepted"
+    with pytest.raises(ValueError):
+        store.reject_step(accepted_id, "Changed my mind too late.")
+
+    feedback_id = store.record_step_feedback(accepted_id, "thumbs_up", "  ")
+    assert store.list_step_feedback(accepted_id)[0]["id"] == feedback_id
+    assert store.list_step_feedback(accepted_id)[0]["value"] is None
+
+    assert store.reject_step(rejected_id, "Too vague for this week.") is True
+    rejected = store.get_step(rejected_id)
+    feedback = store.list_step_feedback(rejected_id)
+
+    assert rejected["status"] == "rejected"
+    assert rejected["rejected_at"] is not None
+    assert feedback[0]["kind"] == "rejection_reason"
+    assert feedback[0]["value"] == "Too vague for this week."
+
+
 def test_goal_delete_cascades_steps_and_feedback(tmp_path):
     store = make_store(tmp_path)
     goal_id = store.create_goal("career", "Learn more about AI safety")
