@@ -779,6 +779,10 @@ Layout:
 - Secondary rail: suggested and accepted steps as context.
 - Goal and step cards use stable category accent colors.
 - Dashboard title changes once per calendar day, not on a timer.
+- The title and goal rail are merged to preserve vertical space for chat.
+- Goal cards are compact and do not surface step details or step counts.
+- Step cards are larger than goal cards and show only enough text to identify
+  the suggestion; full context belongs in the focused Jo chat.
 - Mobile: stack strips vertically and turn chat into a full-width drawer.
 
 Phase 2 visual review moved the dashboard toward a chat-first layout: goals and

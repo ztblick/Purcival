@@ -11,7 +11,7 @@ agent sessions. Read it in full each session. Update sections marked
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
 **Phase:** 2 — Dashboard skeleton
-**Status:** Phase 2 dashboard skeleton revised to chat-first layout after Zach's second visual review; updated desktop/mobile screenshots captured; awaiting final Phase 2 visual approval
+**Status:** Phase 2 dashboard skeleton revised to compact goal rail and larger chat workspace after Zach's third visual review; updated desktop/mobile screenshots captured; awaiting final Phase 2 visual approval
 
 ---
 
@@ -135,7 +135,7 @@ answer in the design doc, Zach reviews.)
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-- Phase 2 / Goals dashboard — review the chat-first dashboard screenshots and cyberpunk visual identity. Zach's notes were applied: once-per-day motivational title, fixed category colors, no visible seed-source tags, no manual accept/reject controls in the skeleton, larger focused Jo chat, and goal-level "steps in progress" counts. The skeleton still renders seeded goals and suggested steps only; real chat-driven mutations remain Phase 4+ work.
+- Phase 2 / Goals dashboard — review the chat-first dashboard screenshots and cyberpunk visual identity. Zach's notes were applied: once-per-day motivational title, fixed category colors, no visible seed-source tags, no manual accept/reject controls in the skeleton, compact goals with no step details, concise step cards, merged title/goals rail, and larger focused Jo chat. The skeleton still renders seeded goals and suggested steps only; real chat-driven mutations remain Phase 4+ work.
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -150,7 +150,8 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
-- 2026-05-17 — Goals dashboard Phase 2 chat-first polish — changed the motivational title to once-per-day selection, removed visible seed-source tags and manual step buttons, enlarged the Jo chat workspace, moved steps into a secondary context rail, refreshed screenshots, and kept dashboard tests passing — committed.
+- 2026-05-17 — Goals dashboard Phase 2 compact rail polish — merged the title and goals rail, made goals smaller than steps, removed step details/counts from goal cards, reduced step cards to concise prompts, refreshed screenshots, and kept dashboard tests passing — committed.
+- 2026-05-17 — Goals dashboard Phase 2 chat-first polish — changed the motivational title to once-per-day selection, removed visible seed-source tags and manual step buttons, enlarged the Jo chat workspace, moved steps into a secondary context rail, refreshed screenshots, and kept dashboard tests passing — 5cad0b9.
 - 2026-05-17 — Goals dashboard Phase 2 visual polish — reduced the header title size, added rotating motivational title phrases, assigned stable category colors, replaced goal suggested/accepted counts with steps-in-progress counts, refreshed screenshots, and kept full pytest passing — e7d3288.
 - 2026-05-17 — Goals dashboard Phase 2 — implemented the FastAPI/Jinja dashboard skeleton, cyberpunk CSS theme, static Jo chat panel, dashboard route tests, and desktop/mobile Playwright screenshots — e8fd5fe.
 - 2026-05-17 — Test baseline cleanup — marked live OpenAI / Google / Ollama tests as opt-in, updated stale proactive and summarizer tests, and restored full pytest to passing — committed.

@@ -50,7 +50,7 @@ textarea {
 
 .dashboard-shell {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 18px;
   min-height: 100vh;
   padding: 22px;
@@ -63,7 +63,6 @@ textarea {
   min-height: 680px;
 }
 
-.topbar,
 .goal-strip,
 .suggestion-strip,
 .chat-panel {
@@ -73,14 +72,12 @@ textarea {
   backdrop-filter: blur(16px);
 }
 
-.topbar {
+.goal-strip__masthead {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  min-height: 96px;
-  padding: 18px 20px;
-  border-radius: var(--radius);
+  margin-bottom: 12px;
 }
 
 .eyebrow {
@@ -108,7 +105,7 @@ h3 {
 
 h1 {
   max-width: 760px;
-  font-size: 3.9rem;
+  font-size: 1.95rem;
   color: var(--text);
   text-shadow: 0 0 28px rgba(255, 138, 42, 0.18);
 }
@@ -152,7 +149,7 @@ h3 {
 .goal-strip,
 .suggestion-strip {
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 14px 16px 16px;
 }
 
 .section-heading {
@@ -161,6 +158,10 @@ h3 {
   justify-content: space-between;
   gap: 14px;
   margin-bottom: 14px;
+}
+
+.section-heading--compact {
+  margin-bottom: 10px;
 }
 
 .goal-grid,
@@ -190,7 +191,6 @@ h3 {
 .context-card {
   position: relative;
   display: flex;
-  min-height: 190px;
   flex-direction: column;
   justify-content: space-between;
   gap: 16px;
@@ -226,6 +226,12 @@ h3 {
   gap: 12px;
 }
 
+.goal-card {
+  min-height: 112px;
+  justify-content: start;
+  padding: 16px 18px;
+}
+
 .goal-card p,
 .step-card p,
 .context-card p,
@@ -251,7 +257,7 @@ h3 {
 }
 
 .step-card {
-  min-height: 190px;
+  min-height: 150px;
   background:
     linear-gradient(150deg, rgba(33, 21, 35, 0.94), rgba(17, 16, 24, 0.95)),
     var(--panel-hot);
@@ -384,7 +390,7 @@ h3 {
   }
 
   h1 {
-    font-size: 2.9rem;
+    font-size: 1.75rem;
   }
 }
 
@@ -393,7 +399,7 @@ h3 {
     padding: 12px;
   }
 
-  .topbar,
+  .goal-strip__masthead,
   .section-heading,
   .step-card__footer {
     align-items: flex-start;
@@ -401,7 +407,7 @@ h3 {
   }
 
   h1 {
-    font-size: 2rem;
+    font-size: 1.5rem;
   }
 
   .goal-grid,

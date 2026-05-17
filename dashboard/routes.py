@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.templating import Jinja2Templates
 
-from dashboard.motivation import MOTIVATIONAL_TITLES, title_for_date
+from dashboard.motivation import title_for_date
 from goals import SharedGoalStore
 
 
@@ -37,20 +37,12 @@ def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
     goals = store.list_goals(status="active")
     steps = store.list_steps()
     goals_by_id = {goal["id"]: goal for goal in goals}
-    steps_by_goal: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    for step in steps:
-        steps_by_goal[step["goal_id"]].append(step)
 
     goal_cards = []
     for goal in goals:
-        goal_steps = steps_by_goal.get(goal["id"], [])
-        suggested = [step for step in goal_steps if step["status"] == "suggested"]
-        accepted = [step for step in goal_steps if step["status"] == "accepted"]
         goal_cards.append({
             **goal,
             "category_class": category_class(goal["category"]),
-            "steps_in_progress_count": len(accepted),
-            "highlight_step": suggested[0] if suggested else accepted[0] if accepted else None,
         })
 
     categories: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -68,7 +60,6 @@ def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
         "suggestions": suggestions,
         "accepted_steps": accepted_steps,
         "active_context": active_context,
-        "motivational_titles": MOTIVATIONAL_TITLES,
         "initial_title": title_for_date(),
     }
 

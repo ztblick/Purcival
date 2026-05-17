@@ -18,9 +18,10 @@ def test_dashboard_renders_seeded_goals(tmp_path, monkeypatch):
     assert any(title in response.text for title in MOTIVATIONAL_TITLES)
     assert "data-title-rotator" not in response.text
     assert "Learn more about AI safety" in response.text
-    assert "steps in progress" in response.text
+    assert "steps in progress" not in response.text
     assert "suggested</span>" not in response.text
     assert "dashboard_seed" not in response.text
+    assert "Review recent notes and write down three technical questions." not in response.text
     assert "Steps" in response.text
     assert "Jo" in response.text
 
@@ -41,6 +42,7 @@ def test_dashboard_partials_render(tmp_path, monkeypatch):
     assert chat_response.status_code == 200
     assert "Stay active &amp; healthy" in goals_response.text
     assert "category-health" in goals_response.text
+    assert "Go to Yoga6 in Palo Alto at 12pm" not in goals_response.text
     assert "Go to Yoga6 in Palo Alto at 12pm" in suggestions_response.text
     assert "category-home" in suggestions_response.text
     assert "Focused Chat" in chat_response.text
