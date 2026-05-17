@@ -1,8 +1,8 @@
 # Goals Dashboard Design
 
-**Status:** Draft for Zach review
+**Status:** Phase 1 implemented; Phase 2 skeleton next
 **Date:** 2026-05-17
-**Phase:** 0 - Design only
+**Phase:** 1 - Data layer implementation
 **Scope:** shared goal state, scoped conversations, dashboard UI, and agent integration
 
 ---
@@ -1008,4 +1008,4 @@ This draft proposes the following concrete decisions for Zach's review:
 - Add `GoalTool` and `SuggestionTool` to the existing agent tool registry.
 - Use `Design/dashboard_goals_design.md` as the canonical Goals dashboard design doc.
 
-If approved, Phase 1 should begin with the data layer and scope migration. No dashboard UI code should be written before Phase 1 data tests are passing.
+Phase 1 proceeded from this approved direction: data layer and scope migration first, with no dashboard UI code before the focused data tests passed.

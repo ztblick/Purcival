@@ -243,8 +243,8 @@ The dashboard will:
 - Let Zach accept, reject, rate, complete, or abandon steps.
 - Surface accepted steps for accountability.
 
-The next implementation stage is Phase 1: data layer and scoped memory. It
-requires Zach's approval of the design doc before code begins.
+The current implementation stage is Phase 2: dashboard skeleton and visual
+identity. Phase 1 data storage and scoped memory are implemented.
 
 ---
 
@@ -263,8 +263,8 @@ requires Zach's approval of the design doc before code begins.
 
 Near term:
 
-- Approve Goals dashboard design.
-- Implement Phase 1 data layer.
+- Build Phase 2 dashboard skeleton.
+- Review the first dashboard screenshot for cyberpunk visual identity.
 - Normalize Windows test baseline.
 - Build dashboard skeleton after data layer is stable.
 

@@ -20,3 +20,6 @@ google-auth-httplib2>=0.2.0
 
 # Stage 5: ChatGPT provider
 openai>=1.0.0
+
+# Test runner
+pytest>=9.0.0

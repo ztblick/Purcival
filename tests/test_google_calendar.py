@@ -18,11 +18,14 @@ Covers:
 """
 
 import json
+import os
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone, date as date_type
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -655,6 +658,8 @@ def test_get_upcoming_full_detail():
 
 def _credentials_available():
     """Check if Google Calendar credentials exist for testing."""
+    if os.getenv("PURCIVAL_RUN_LIVE_TESTS") != "1":
+        return False
     try:
         from google_auth import get_credentials
         creds = get_credentials("jo")
@@ -663,6 +668,10 @@ def _credentials_available():
         return False
 
 
+@pytest.mark.skipif(
+    not _credentials_available(),
+    reason="live Google Calendar test; set PURCIVAL_RUN_LIVE_TESTS=1 and working Google credentials to run",
+)
 def test_live_calendar_list():
     """Live test: verify calendarList.list() returns calendars."""
     from google_auth import get_credentials
@@ -685,6 +694,10 @@ def test_live_calendar_list():
     print("  \u2713 live_calendar_list")
 
 
+@pytest.mark.skipif(
+    not _credentials_available(),
+    reason="live Google Calendar test; set PURCIVAL_RUN_LIVE_TESTS=1 and working Google credentials to run",
+)
 def test_live_upcoming_events():
     """Live test: fetch upcoming events and verify format."""
     from google_auth import get_credentials
@@ -701,6 +714,10 @@ def test_live_upcoming_events():
     print("  \u2713 live_upcoming_events")
 
 
+@pytest.mark.skipif(
+    not _credentials_available(),
+    reason="live Google Calendar test; set PURCIVAL_RUN_LIVE_TESTS=1 and working Google credentials to run",
+)
 def test_live_get_context():
     """Live test: run the full get_context() pipeline."""
     from google_auth import get_credentials

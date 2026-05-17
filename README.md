@@ -216,7 +216,7 @@ by git.
 
 ## Goals Dashboard
 
-Current phase: design review.
+Current phase: Phase 2 dashboard skeleton.
 
 Canonical design doc:
 
@@ -234,7 +234,8 @@ Planned implementation phases:
 - Phase 6: accountability.
 - Phase 7: feedback-loop polish.
 
-Do not start production dashboard code until the design doc is approved.
+Phase 1 data storage and scoped memory are implemented. No dashboard UI has
+shipped yet; Phase 2 starts with the screenshot-driven dashboard skeleton.
 
 ## Project Structure
 
@@ -268,15 +269,14 @@ The intended test runner is:
 pytest
 ```
 
-The current Windows environment may need test tooling installed or cleaned up
-before the full suite is reliable. Some older direct-run test files still carry
-legacy assumptions; normalize the test baseline before treating "full suite
-green" as meaningful.
+Live OpenAI, Google Calendar, and Ollama summarization tests are skipped by
+default during dashboard design work. To run them, set
+`PURCIVAL_RUN_LIVE_TESTS=1` and make sure the relevant credentials or local
+services are available.
 
 ## Roadmap
 
-- Goals dashboard Phase 1 data layer.
-- Dashboard skeleton and local UI.
+- Goals dashboard Phase 2 skeleton and local UI.
 - Scoped Jo chats for goals and steps.
 - Agent-generated suggestions tied to active goals.
 - Accountability context for accepted steps.

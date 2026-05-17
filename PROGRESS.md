@@ -10,8 +10,8 @@ agent sessions. Read it in full each session. Update sections marked
 
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
-**Phase:** 0 — Design (no production code yet)
-**Status:** Docs normalized for Windows / Jo-only / inactive Telegram context; awaiting Zach approval before Phase 1
+**Phase:** 2 — Dashboard skeleton
+**Status:** Phase 1 data layer complete and full test baseline clean; ready to begin screenshot-driven dashboard skeleton
 
 ---
 
@@ -135,7 +135,7 @@ answer in the design doc, Zach reviews.)
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-- Phase 0 / Goals dashboard — approve `Design/dashboard_goals_design.md` as the basis for Phase 1. Proposed direction: store shared goals/steps/feedback in `data/user.db`; add typed `scope_type` + `scope_id` columns to persona `messages` and `summaries`; keep dashboard chats in Jo's existing memory infrastructure; register `GoalTool` and `SuggestionTool` through the existing agent tool registry.
+- Phase 2 / Goals dashboard — next review gate is the dashboard skeleton screenshot and cyberpunk visual identity. Data-layer direction is implemented and tested; Phase 2 should render from seed data only, with no accept/reject or chat behavior yet.
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -150,6 +150,8 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-17 — Test baseline cleanup — marked live OpenAI / Google / Ollama tests as opt-in, updated stale proactive and summarizer tests, and restored full pytest to passing — committed.
+- 2026-05-17 — Goals dashboard Phase 1 — implemented shared `data/user.db` goal storage, scoped persona messages/summaries, scoped summarization/context hooks, idempotent mockup seed data, and focused data-layer tests — committed.
 - 2026-05-17 — Documentation consistency — renamed the agent loop design doc, rewrote stale README and overall design handoff for Windows / Jo-only / inactive Telegram context, and removed active numbered-agent terminology — uncommitted.
 - 2026-05-17 — Goals dashboard Phase 0 — drafted `Design/dashboard_goals_design.md` covering shared goal schema, scoped chat architecture, tool integration, dashboard UI routes, SSE chat flow, and test strategy — uncommitted.
 - 2026-05-17 — Project docs — normalized operating docs to `AGENTS.md`, moved design-doc references to `Design/`, and logged Telegram `/status` provider-model drift for later fix — 241f844.
@@ -178,6 +180,8 @@ Append entries; never edit prior ones.
 - **2026-05-16 — Step chats are scope-tagged within Purcival's existing message infrastructure.** The leading proposal for Phase 0: add a `scope` (or `entity_type` + `entity_id`) column to `messages`; null = default chat, `step:N` = step-scoped. Summarization and retrieval honor scope. Design phase confirms exact shape.
 - **2026-05-17 — Design documents live under `Design/`.** Zach clarified that all design documents should be referenced from the `Design/` directory. Operational instructions live in `AGENTS.md`.
 - **2026-05-17 — Agent loop design doc renamed.** The old numbered agent design doc became `Design/agent_loop_design.md` to avoid confusing the completed agent architecture with future numbered Goals dashboard phases.
+- **2026-05-17 — Goals dashboard Phase 1 began from the approved Phase 0 design.** Zach explicitly asked to begin Phase 1 after reviewing the dashboard design and mockup direction. Implementation follows the approved `data/user.db` + typed message scope design.
+- **2026-05-17 — Live integration tests are opt-in during dashboard design.** OpenAI, Google Calendar, and live Ollama summarization tests are skipped by default under pytest. Run them with `PURCIVAL_RUN_LIVE_TESTS=1` plus the relevant API keys, credentials, or local services. This keeps dashboard data/UI work from being blocked by secondary integrations.
 
 ---
 
@@ -209,7 +213,7 @@ Append entries; never edit prior ones.
 - `Design/PURCIVAL_DESIGN_DOC.md` — overall system design (living)
 - `Design/agent_loop_design.md` — agent loop architecture
 - `Design/openai_integration_design.md` — OpenAI integration design (completed)
-- `Design/dashboard_goals_design.md` — Goals dashboard design (Phase 0 draft awaiting review)
+- `Design/dashboard_goals_design.md` — Goals dashboard design (Phase 2 skeleton next)
 - `README.md` — project overview and setup
 
 If any of these go stale because of changes you make, update them in the same session.

@@ -19,7 +19,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from memory import PersonaMemory
+from memory import MessageScope, PersonaMemory
 from tokens import get_token_count
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,7 @@ DEVICE_TELEGRAM = "telegram"
 BUDGET_PERSONA = 2_000
 BUDGET_USER_CONTEXT = 2_000
 BUDGET_SCHEDULED_PLAN = 2_000
+BUDGET_ACTIVE_DASHBOARD_CONTEXT = 2_000
 BUDGET_SUMMARIES = 8_000
 BUDGET_ADDITIONAL = 8_000
 BUDGET_MESSAGES = 8_000
@@ -129,8 +130,17 @@ def _load_scheduled_plan(memory: PersonaMemory) -> str:
     return "\n".join(lines)
 
 
-def _load_summaries(memory: PersonaMemory, current_message: str) -> str:
-    all_summaries = memory.get_all_summaries()
+def _load_summaries(
+    memory: PersonaMemory,
+    current_message: str,
+    scope: MessageScope | None = None,
+) -> str:
+    resolved_scope = memory._normalize_scope(scope)
+    include_default = resolved_scope.scope_type != "default"
+    all_summaries = memory.get_all_summaries(
+        scope=resolved_scope,
+        include_default=include_default,
+    )
     if not all_summaries:
         return ""
 
@@ -140,7 +150,11 @@ def _load_summaries(memory: PersonaMemory, current_message: str) -> str:
             from embeddings import get_embedding, EMBEDDING_DIM
             query_embedding = get_embedding(current_message)
             search_results = memory.search_summaries(
-                query_embedding, top_k=SUMMARY_TOP_K, embedding_dim=EMBEDDING_DIM,
+                query_embedding,
+                top_k=SUMMARY_TOP_K,
+                embedding_dim=EMBEDDING_DIM,
+                scope=resolved_scope,
+                include_default=include_default,
             )
             semantic_results = [r for r in search_results if r["similarity"] >= SUMMARY_MIN_SIMILARITY]
         except Exception as e:
@@ -171,8 +185,11 @@ def _load_summaries(memory: PersonaMemory, current_message: str) -> str:
     parts = []
     for r in merged:
         sim_note = f" (relevance: {r['similarity']:.2f})" if r["similarity"] is not None else ""
+        scope_note = ""
+        if r.get("scope_type") and r.get("scope_type") != resolved_scope.scope_type:
+            scope_note = " [default background]"
         date = r.get("created_at", "unknown date")
-        parts.append(f"[{date}]{sim_note}\n{r['summary']}")
+        parts.append(f"[{date}]{sim_note}{scope_note}\n{r['summary']}")
 
     return "\n\n---\n\n".join(parts)
 
@@ -314,13 +331,29 @@ def _truncate_to_budget(text: str, budget: int) -> str:
     return truncated + "\n\n[... content truncated to fit token budget ...]"
 
 
-def _build_system_prompt(persona_prompt, memory, current_message, device):
+def _build_system_prompt(
+    persona_prompt,
+    memory,
+    current_message,
+    device,
+    scope: MessageScope | None = None,
+    entity_context: str | None = None,
+):
     sections = [
         ("PERSONA", persona_prompt, BUDGET_PERSONA),
         ("ABOUT THE USER", _load_user_context(), BUDGET_USER_CONTEXT),
         ("CURRENT SESSION", _load_session_context(device), 500),
+        (
+            "ACTIVE DASHBOARD CONTEXT",
+            entity_context or "",
+            BUDGET_ACTIVE_DASHBOARD_CONTEXT,
+        ),
         ("YOUR SCHEDULED PLAN", _load_scheduled_plan(memory), BUDGET_SCHEDULED_PLAN),
-        ("RELEVANT PAST CONVERSATIONS", _load_summaries(memory, current_message), BUDGET_SUMMARIES),
+        (
+            "RELEVANT PAST CONVERSATIONS",
+            _load_summaries(memory, current_message, scope=scope),
+            BUDGET_SUMMARIES,
+        ),
         ("TOOL CONTEXT", _load_tool_contexts(memory), BUDGET_ADDITIONAL),
     ]
     parts = []
@@ -332,8 +365,12 @@ def _build_system_prompt(persona_prompt, memory, current_message, device):
     return "\n\n---\n\n".join(parts)
 
 
-def _build_messages(memory, max_tokens=BUDGET_MESSAGES):
-    all_recent = memory.get_recent_messages(limit=200)
+def _build_messages(
+    memory,
+    max_tokens=BUDGET_MESSAGES,
+    scope: MessageScope | None = None,
+):
+    all_recent = memory.get_recent_messages(limit=200, scope=scope)
     if not all_recent:
         return []
     selected = []
@@ -352,12 +389,25 @@ def _build_messages(memory, max_tokens=BUDGET_MESSAGES):
     return selected
 
 
-def assemble_context(persona_prompt, memory, device=DEVICE_TERMINAL):
-    messages = _build_messages(memory)
+def assemble_context(
+    persona_prompt,
+    memory,
+    device=DEVICE_TERMINAL,
+    scope: MessageScope | None = None,
+    entity_context: str | None = None,
+):
+    messages = _build_messages(memory, scope=scope)
     current_message = ""
     for msg in reversed(messages):
         if msg["role"] == "user":
             current_message = msg["content"]
             break
-    system_prompt = _build_system_prompt(persona_prompt, memory, current_message, device)
+    system_prompt = _build_system_prompt(
+        persona_prompt,
+        memory,
+        current_message,
+        device,
+        scope=scope,
+        entity_context=entity_context,
+    )
     return system_prompt, messages

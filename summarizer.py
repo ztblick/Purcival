@@ -21,7 +21,7 @@ Usage:
 
 import logging
 import brain
-from memory import PersonaMemory
+from memory import MessageScope, PersonaMemory
 from embeddings import get_embedding
 from tokens import get_token_count
 
@@ -140,7 +140,11 @@ def _generate_summary(messages: list[dict]) -> str:
     return summary.strip()
 
 
-def _summarize_one_batch(memory: PersonaMemory, unsummarized: list[dict]) -> bool:
+def _summarize_one_batch(
+    memory: PersonaMemory,
+    unsummarized: list[dict],
+    scope: MessageScope | None = None,
+) -> bool:
     """
     Summarize a single batch from the front of the unsummarized messages.
 
@@ -176,6 +180,7 @@ def _summarize_one_batch(memory: PersonaMemory, unsummarized: list[dict]) -> boo
             message_start=message_start,
             message_end=message_end,
             embedding=None,
+            scope=scope,
         )
         logger.info("Summary stored without embedding.")
         return True
@@ -186,6 +191,7 @@ def _summarize_one_batch(memory: PersonaMemory, unsummarized: list[dict]) -> boo
         message_start=message_start,
         message_end=message_end,
         embedding=embedding,
+        scope=scope,
     )
 
     logger.info(
@@ -197,7 +203,10 @@ def _summarize_one_batch(memory: PersonaMemory, unsummarized: list[dict]) -> boo
     return True
 
 
-def check_and_summarize(memory: PersonaMemory) -> int:
+def check_and_summarize(
+    memory: PersonaMemory,
+    scope: MessageScope | None = None,
+) -> int:
     """
     Check if summarization is needed and process batches until caught up.
 
@@ -208,6 +217,7 @@ def check_and_summarize(memory: PersonaMemory) -> int:
 
     Args:
         memory: The persona's memory instance.
+        scope: Dashboard chat scope. Defaults to the normal persona chat.
 
     Returns:
         Number of summaries generated (0 if not needed).
@@ -217,7 +227,7 @@ def check_and_summarize(memory: PersonaMemory) -> int:
     for _ in range(MAX_BATCHES_PER_PASS):
         # Re-fetch unsummarized messages each iteration since the
         # previous batch moved the cursor forward.
-        unsummarized = memory.get_unsummarized_messages()
+        unsummarized = memory.get_unsummarized_messages(scope=scope)
         total_tokens = sum(get_token_count(m["content"]) for m in unsummarized)
 
         if total_tokens < SUMMARIZE_THRESHOLD_TOKENS:
@@ -228,7 +238,7 @@ def check_and_summarize(memory: PersonaMemory) -> int:
             f"(threshold: {SUMMARIZE_THRESHOLD_TOKENS})"
         )
 
-        success = _summarize_one_batch(memory, unsummarized)
+        success = _summarize_one_batch(memory, unsummarized, scope=scope)
         if success:
             summaries_created += 1
         else:

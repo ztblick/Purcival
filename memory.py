@@ -40,11 +40,56 @@ Design notes:
 import json
 import sqlite3
 import numpy as np
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime, timedelta
 
 # All persona data lives under this directory
 DATA_DIR = Path(__file__).parent / "data"
+
+
+@dataclass(frozen=True)
+class MessageScope:
+    """
+    Identifies which dashboard conversation a message belongs to.
+
+    The default scope is the normal persona chat. Goal and step scopes are
+    focused dashboard threads whose rows live in the same persona database.
+    """
+
+    scope_type: str = "default"
+    scope_id: int | None = None
+
+    def __post_init__(self):
+        if self.scope_type not in ("default", "goal", "step"):
+            raise ValueError(
+                "scope_type must be one of 'default', 'goal', or 'step'"
+            )
+        if self.scope_type == "default" and self.scope_id is not None:
+            raise ValueError("default scope must not have a scope_id")
+        if self.scope_type in ("goal", "step"):
+            if self.scope_id is None:
+                raise ValueError(f"{self.scope_type} scope requires a scope_id")
+            if self.scope_id < 1:
+                raise ValueError("scope_id must be a positive integer")
+
+    @classmethod
+    def default(cls) -> "MessageScope":
+        return cls()
+
+    @classmethod
+    def goal(cls, goal_id: int) -> "MessageScope":
+        return cls("goal", goal_id)
+
+    @classmethod
+    def step(cls, step_id: int) -> "MessageScope":
+        return cls("step", step_id)
+
+    @property
+    def label(self) -> str:
+        if self.scope_type == "default":
+            return "default"
+        return f"{self.scope_type}:{self.scope_id}"
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -115,6 +160,8 @@ class PersonaMemory:
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
                     role        TEXT NOT NULL,
                     content     TEXT NOT NULL,
+                    scope_type  TEXT NOT NULL DEFAULT 'default',
+                    scope_id    INTEGER,
                     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
 
@@ -124,6 +171,8 @@ class PersonaMemory:
                     message_start   INTEGER NOT NULL,
                     message_end     INTEGER NOT NULL,
                     embedding       BLOB,
+                    scope_type      TEXT NOT NULL DEFAULT 'default',
+                    scope_id        INTEGER,
                     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
 
@@ -217,6 +266,7 @@ class PersonaMemory:
         # but SQLite throws an error if it does. We catch and ignore that.
         self._migrate_schedule_config()
         self._migrate_agent_narrative()
+        self._migrate_message_scopes()
 
     def _migrate_schedule_config(self):
         """Add max_actions_per_day to schedule_config if it's missing."""
@@ -270,9 +320,63 @@ class PersonaMemory:
         finally:
             conn.close()
 
+    def _migrate_message_scopes(self):
+        """Add dashboard scope columns to existing persona memory tables."""
+        conn = self._connect()
+        try:
+            self._add_column_if_missing(
+                conn,
+                "messages",
+                "scope_type",
+                "TEXT NOT NULL DEFAULT 'default'",
+            )
+            self._add_column_if_missing(conn, "messages", "scope_id", "INTEGER")
+            self._add_column_if_missing(
+                conn,
+                "summaries",
+                "scope_type",
+                "TEXT NOT NULL DEFAULT 'default'",
+            )
+            self._add_column_if_missing(conn, "summaries", "scope_id", "INTEGER")
+            conn.executescript("""
+                CREATE INDEX IF NOT EXISTS idx_messages_scope_id
+                    ON messages(scope_type, scope_id, id);
+
+                CREATE INDEX IF NOT EXISTS idx_summaries_scope_range
+                    ON summaries(scope_type, scope_id, message_start, message_end);
+            """)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _add_column_if_missing(
+        self,
+        conn: sqlite3.Connection,
+        table_name: str,
+        column_name: str,
+        column_sql: str,
+    ):
+        """Add one column to a SQLite table when an older DB lacks it."""
+        columns = {
+            row["name"]
+            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if column_name not in columns:
+            conn.execute(
+                f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}"
+            )
+
     # --- Message Operations ---
 
-    def add_message(self, role: str, content: str) -> int:
+    def _normalize_scope(self, scope: MessageScope | None = None) -> MessageScope:
+        return scope if scope is not None else MessageScope.default()
+
+    def add_message(
+        self,
+        role: str,
+        content: str,
+        scope: MessageScope | None = None,
+    ) -> int:
         """
         Store a message and return its ID.
 
@@ -284,6 +388,7 @@ class PersonaMemory:
         Args:
             role: "user" or "assistant"
             content: The message text
+            scope: Dashboard chat scope. Defaults to the normal persona chat.
 
         Returns:
             The database ID of the stored message.
@@ -291,19 +396,34 @@ class PersonaMemory:
         if role not in ("user", "assistant"):
             raise ValueError(f"Invalid role '{role}'. Must be 'user' or 'assistant'.")
 
+        resolved_scope = self._normalize_scope(scope)
         conn = self._connect()
         try:
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor = conn.execute(
-                "INSERT INTO messages (role, content, created_at) VALUES (?, ?, ?)",
-                (role, content, now),
+                """
+                INSERT INTO messages
+                    (role, content, scope_type, scope_id, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    role,
+                    content,
+                    resolved_scope.scope_type,
+                    resolved_scope.scope_id,
+                    now,
+                ),
             )
             conn.commit()
             return cursor.lastrowid
         finally:
             conn.close()
 
-    def get_recent_messages(self, limit: int = 20) -> list[dict]:
+    def get_recent_messages(
+        self,
+        limit: int = 20,
+        scope: MessageScope | None = None,
+    ) -> list[dict]:
         """
         Get the most recent messages, ordered oldest-first.
 
@@ -313,29 +433,45 @@ class PersonaMemory:
 
         Args:
             limit: Maximum number of messages to return.
+            scope: Dashboard chat scope. Defaults to the normal persona chat.
 
         Returns:
             List of dicts with 'id', 'role', 'content', 'created_at'.
             Ordered chronologically (oldest first), which is what the
             LLM expects.
         """
+        resolved_scope = self._normalize_scope(scope)
         conn = self._connect()
         try:
             rows = conn.execute(
                 """
-                SELECT id, role, content, created_at
+                SELECT id, role, content, scope_type, scope_id, created_at
                 FROM messages
+                WHERE scope_type = ?
+                  AND (
+                      (? IS NULL AND scope_id IS NULL)
+                      OR scope_id = ?
+                  )
                 ORDER BY id DESC
                 LIMIT ?
                 """,
-                (limit,),
+                (
+                    resolved_scope.scope_type,
+                    resolved_scope.scope_id,
+                    resolved_scope.scope_id,
+                    limit,
+                ),
             ).fetchall()
             # Reverse so oldest is first (LLM expects chronological order)
             return [dict(row) for row in reversed(rows)]
         finally:
             conn.close()
 
-    def get_messages_since(self, after_id: int) -> list[dict]:
+    def get_messages_since(
+        self,
+        after_id: int,
+        scope: MessageScope | None = None,
+    ) -> list[dict]:
         """
         Get all messages with ID greater than after_id.
 
@@ -343,30 +479,58 @@ class PersonaMemory:
 
         Args:
             after_id: Return messages with ID strictly greater than this.
+            scope: Dashboard chat scope. Defaults to the normal persona chat.
 
         Returns:
             List of dicts, ordered chronologically.
         """
+        resolved_scope = self._normalize_scope(scope)
         conn = self._connect()
         try:
             rows = conn.execute(
                 """
-                SELECT id, role, content, created_at
+                SELECT id, role, content, scope_type, scope_id, created_at
                 FROM messages
                 WHERE id > ?
+                  AND scope_type = ?
+                  AND (
+                      (? IS NULL AND scope_id IS NULL)
+                      OR scope_id = ?
+                  )
                 ORDER BY id ASC
                 """,
-                (after_id,),
+                (
+                    after_id,
+                    resolved_scope.scope_type,
+                    resolved_scope.scope_id,
+                    resolved_scope.scope_id,
+                ),
             ).fetchall()
             return [dict(row) for row in rows]
         finally:
             conn.close()
 
-    def get_message_count(self) -> int:
-        """Return total number of messages stored."""
+    def get_message_count(self, scope: MessageScope | None = None) -> int:
+        """Return total number of messages stored for a scope."""
+        resolved_scope = self._normalize_scope(scope)
         conn = self._connect()
         try:
-            row = conn.execute("SELECT COUNT(*) as count FROM messages").fetchone()
+            row = conn.execute(
+                """
+                SELECT COUNT(*) as count
+                FROM messages
+                WHERE scope_type = ?
+                  AND (
+                      (? IS NULL AND scope_id IS NULL)
+                      OR scope_id = ?
+                  )
+                """,
+                (
+                    resolved_scope.scope_type,
+                    resolved_scope.scope_id,
+                    resolved_scope.scope_id,
+                ),
+            ).fetchone()
             return row["count"]
         finally:
             conn.close()
@@ -379,6 +543,7 @@ class PersonaMemory:
         message_start: int,
         message_end: int,
         embedding: np.ndarray | None = None,
+        scope: MessageScope | None = None,
     ) -> int:
         """
         Store a conversation summary with its embedding.
@@ -392,10 +557,12 @@ class PersonaMemory:
             message_start: ID of the first message covered.
             message_end: ID of the last message covered.
             embedding: Vector embedding of the summary (numpy array).
+            scope: Dashboard chat scope. Defaults to the normal persona chat.
 
         Returns:
             The database ID of the stored summary.
         """
+        resolved_scope = self._normalize_scope(scope)
         embedding_blob = embedding.tobytes() if embedding is not None else None
 
         conn = self._connect()
@@ -403,10 +570,20 @@ class PersonaMemory:
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor = conn.execute(
                 """
-                INSERT INTO summaries (summary, message_start, message_end, embedding, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO summaries
+                    (summary, message_start, message_end, embedding,
+                     scope_type, scope_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (summary, message_start, message_end, embedding_blob, now),
+                (
+                    summary,
+                    message_start,
+                    message_end,
+                    embedding_blob,
+                    resolved_scope.scope_type,
+                    resolved_scope.scope_id,
+                    now,
+                ),
             )
             conn.commit()
             return cursor.lastrowid
@@ -418,6 +595,8 @@ class PersonaMemory:
         query_embedding: np.ndarray,
         top_k: int = 5,
         embedding_dim: int = 768,
+        scope: MessageScope | None = None,
+        include_default: bool = False,
     ) -> list[dict]:
         """
         Find the most relevant summaries using cosine similarity.
@@ -432,21 +611,61 @@ class PersonaMemory:
             top_k: Number of summaries to return.
             embedding_dim: Dimension of the embedding vectors (must match
                 the embedding model's output size).
+            scope: Dashboard chat scope. Defaults to the normal persona chat.
+            include_default: For goal/step scopes, also search default-scope
+                summaries as lower-priority background.
 
         Returns:
             List of dicts with 'id', 'summary', 'message_start',
             'message_end', 'created_at', 'similarity'. Ordered by
             similarity descending (most relevant first).
         """
+        resolved_scope = self._normalize_scope(scope)
         conn = self._connect()
         try:
-            rows = conn.execute(
-                """
-                SELECT id, summary, message_start, message_end, embedding, created_at
-                FROM summaries
-                WHERE embedding IS NOT NULL
-                """
-            ).fetchall()
+            if include_default and resolved_scope.scope_type != "default":
+                rows = conn.execute(
+                    """
+                    SELECT id, summary, message_start, message_end, embedding,
+                           scope_type, scope_id, created_at
+                    FROM summaries
+                    WHERE embedding IS NOT NULL
+                      AND (
+                          (
+                              scope_type = ?
+                              AND (
+                                  (? IS NULL AND scope_id IS NULL)
+                                  OR scope_id = ?
+                              )
+                          )
+                          OR (scope_type = 'default' AND scope_id IS NULL)
+                      )
+                    """,
+                    (
+                        resolved_scope.scope_type,
+                        resolved_scope.scope_id,
+                        resolved_scope.scope_id,
+                    ),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, summary, message_start, message_end, embedding,
+                           scope_type, scope_id, created_at
+                    FROM summaries
+                    WHERE embedding IS NOT NULL
+                      AND scope_type = ?
+                      AND (
+                          (? IS NULL AND scope_id IS NULL)
+                          OR scope_id = ?
+                      )
+                    """,
+                    (
+                        resolved_scope.scope_type,
+                        resolved_scope.scope_id,
+                        resolved_scope.scope_id,
+                    ),
+                ).fetchall()
         finally:
             conn.close()
 
@@ -465,6 +684,8 @@ class PersonaMemory:
                 "summary": row["summary"],
                 "message_start": row["message_start"],
                 "message_end": row["message_end"],
+                "scope_type": row["scope_type"],
+                "scope_id": row["scope_id"],
                 "created_at": row["created_at"],
                 "similarity": similarity,
             })
@@ -473,27 +694,68 @@ class PersonaMemory:
         results.sort(key=lambda x: x["similarity"], reverse=True)
         return results[:top_k]
 
-    def get_all_summaries(self) -> list[dict]:
+    def get_all_summaries(
+        self,
+        scope: MessageScope | None = None,
+        include_default: bool = False,
+    ) -> list[dict]:
         """
         Get all summaries, ordered chronologically.
 
         Useful for debugging and for the /status command to show
         memory state.
         """
+        resolved_scope = self._normalize_scope(scope)
         conn = self._connect()
         try:
-            rows = conn.execute(
-                """
-                SELECT id, summary, message_start, message_end, created_at
-                FROM summaries
-                ORDER BY message_start ASC
-                """
-            ).fetchall()
+            if include_default and resolved_scope.scope_type != "default":
+                rows = conn.execute(
+                    """
+                    SELECT id, summary, message_start, message_end,
+                           scope_type, scope_id, created_at
+                    FROM summaries
+                    WHERE (
+                        (
+                            scope_type = ?
+                            AND (
+                                (? IS NULL AND scope_id IS NULL)
+                                OR scope_id = ?
+                            )
+                        )
+                        OR (scope_type = 'default' AND scope_id IS NULL)
+                    )
+                    ORDER BY message_start ASC
+                    """,
+                    (
+                        resolved_scope.scope_type,
+                        resolved_scope.scope_id,
+                        resolved_scope.scope_id,
+                    ),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, summary, message_start, message_end,
+                           scope_type, scope_id, created_at
+                    FROM summaries
+                    WHERE scope_type = ?
+                      AND (
+                          (? IS NULL AND scope_id IS NULL)
+                          OR scope_id = ?
+                      )
+                    ORDER BY message_start ASC
+                    """,
+                    (
+                        resolved_scope.scope_type,
+                        resolved_scope.scope_id,
+                        resolved_scope.scope_id,
+                    ),
+                ).fetchall()
             return [dict(row) for row in rows]
         finally:
             conn.close()
 
-    def get_last_summarized_id(self) -> int:
+    def get_last_summarized_id(self, scope: MessageScope | None = None) -> int:
         """
         Find the highest message ID that has been summarized.
 
@@ -504,10 +766,24 @@ class PersonaMemory:
             The highest message_end across all summaries, or 0
             if no summaries exist yet.
         """
+        resolved_scope = self._normalize_scope(scope)
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT MAX(message_end) as last_id FROM summaries"
+                """
+                SELECT MAX(message_end) as last_id
+                FROM summaries
+                WHERE scope_type = ?
+                  AND (
+                      (? IS NULL AND scope_id IS NULL)
+                      OR scope_id = ?
+                  )
+                """,
+                (
+                    resolved_scope.scope_type,
+                    resolved_scope.scope_id,
+                    resolved_scope.scope_id,
+                ),
             ).fetchone()
             return row["last_id"] or 0
         finally:
@@ -1132,7 +1408,10 @@ class PersonaMemory:
 
     # --- Utility ---
 
-    def get_unsummarized_messages(self) -> list[dict]:
+    def get_unsummarized_messages(
+        self,
+        scope: MessageScope | None = None,
+    ) -> list[dict]:
         """
         Get all messages that haven't been covered by any summary.
 
@@ -1140,10 +1419,11 @@ class PersonaMemory:
         if len(memory.get_unsummarized_messages()) exceeds the
         token threshold, it's time to summarize.
         """
-        last_id = self.get_last_summarized_id()
-        return self.get_messages_since(last_id)
+        resolved_scope = self._normalize_scope(scope)
+        last_id = self.get_last_summarized_id(resolved_scope)
+        return self.get_messages_since(last_id, resolved_scope)
 
-    def clear_history(self):
+    def clear_history(self, scope: MessageScope | None = None):
         """
         Delete all messages, summaries, and triggers. Used by /clear.
 
@@ -1154,9 +1434,42 @@ class PersonaMemory:
         """
         conn = self._connect()
         try:
-            conn.execute("DELETE FROM messages")
-            conn.execute("DELETE FROM summaries")
-            conn.execute("DELETE FROM triggers")
+            if scope is None:
+                conn.execute("DELETE FROM messages")
+                conn.execute("DELETE FROM summaries")
+                conn.execute("DELETE FROM triggers")
+            else:
+                resolved_scope = self._normalize_scope(scope)
+                conn.execute(
+                    """
+                    DELETE FROM messages
+                    WHERE scope_type = ?
+                      AND (
+                          (? IS NULL AND scope_id IS NULL)
+                          OR scope_id = ?
+                      )
+                    """,
+                    (
+                        resolved_scope.scope_type,
+                        resolved_scope.scope_id,
+                        resolved_scope.scope_id,
+                    ),
+                )
+                conn.execute(
+                    """
+                    DELETE FROM summaries
+                    WHERE scope_type = ?
+                      AND (
+                          (? IS NULL AND scope_id IS NULL)
+                          OR scope_id = ?
+                      )
+                    """,
+                    (
+                        resolved_scope.scope_type,
+                        resolved_scope.scope_id,
+                        resolved_scope.scope_id,
+                    ),
+                )
             conn.commit()
         finally:
             conn.close()

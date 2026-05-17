@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
+import pytest
+
 # Ensure project root is on the path when run directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -368,9 +370,16 @@ def test_ask_raises_without_system_prompt():
 # ---------------------------------------------------------------------------
 
 def _chatgpt_available() -> bool:
-    return bool(os.getenv("OPENAI_API_KEY"))
+    return (
+        os.getenv("PURCIVAL_RUN_LIVE_TESTS") == "1"
+        and bool(os.getenv("OPENAI_API_KEY"))
+    )
 
 
+@pytest.mark.skipif(
+    not _chatgpt_available(),
+    reason="live OpenAI smoke test; set PURCIVAL_RUN_LIVE_TESTS=1 and OPENAI_API_KEY to run",
+)
 def test_smoke_chatgpt_chat():
     """Real API call for task='chat' should return a non-empty string."""
     print("  test_smoke_chatgpt_chat...", end=" ")
@@ -390,6 +399,10 @@ def test_smoke_chatgpt_chat():
     print(f"PASS (response: '{result.strip()[:40]}')")
 
 
+@pytest.mark.skipif(
+    not _chatgpt_available(),
+    reason="live OpenAI smoke test; set PURCIVAL_RUN_LIVE_TESTS=1 and OPENAI_API_KEY to run",
+)
 def test_smoke_chatgpt_reasoning():
     """Real API call for task='reasoning' should return a non-empty string."""
     print("  test_smoke_chatgpt_reasoning...", end=" ")
@@ -453,7 +466,7 @@ if __name__ == "__main__":
     print()
 
     if _chatgpt_available():
-        print("  Smoke tests (OPENAI_API_KEY detected):\n")
+        print("  Smoke tests (live tests enabled):\n")
         for test in smoke_tests:
             try:
                 test()

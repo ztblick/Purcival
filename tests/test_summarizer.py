@@ -7,7 +7,7 @@ Offline tests verify:
     - Batch selection respects token budgets
     - Threshold detection works correctly
     - Message formatting produces readable transcripts
-    - check_and_summarize returns False when below threshold
+    - check_and_summarize returns 0 when below threshold
 
 Live tests (require Ollama) verify:
     - A real summary is generated from test messages
@@ -18,7 +18,10 @@ If Ollama isn't running, live tests skip gracefully.
 
 import sys
 import shutil
+import os
 from pathlib import Path
+
+import pytest
 
 import memory
 import summarizer
@@ -95,7 +98,7 @@ def test_format_messages():
 
 
 def test_no_summarization_below_threshold():
-    """check_and_summarize should return False when below threshold."""
+    """check_and_summarize should return 0 when below threshold."""
     print("  test_no_summarization_below_threshold...", end=" ")
 
     mem = memory.PersonaMemory("test_below_threshold")
@@ -106,7 +109,7 @@ def test_no_summarization_below_threshold():
         mem.add_message(role, f"Short message {i}")
 
     result = summarizer.check_and_summarize(mem)
-    assert result is False, "Should not summarize with few messages"
+    assert result == 0, "Should not summarize with few messages"
     assert len(mem.get_all_summaries()) == 0
 
     print("PASS")
@@ -138,6 +141,8 @@ def test_threshold_detection():
 
 def _ollama_available() -> bool:
     """Check if Ollama is running with both models needed."""
+    if os.getenv("PURCIVAL_RUN_LIVE_TESTS") != "1":
+        return False
     try:
         import requests
         import config
@@ -151,7 +156,7 @@ def _ollama_available() -> bool:
         r2 = requests.post(
             f"{config.OLLAMA_BASE_URL}/v1/chat/completions",
             json={
-                "model": config.OLLAMA_MODEL,
+                "model": config.OLLAMA_SUMMARY_MODEL,
                 "messages": [{"role": "user", "content": "test"}],
             },
             timeout=30,
@@ -161,6 +166,10 @@ def _ollama_available() -> bool:
         return False
 
 
+@pytest.mark.skipif(
+    not _ollama_available(),
+    reason="live Ollama summarization test; set PURCIVAL_RUN_LIVE_TESTS=1 and run Ollama to enable",
+)
 def test_live_full_summarization():
     """End-to-end: generate enough messages, trigger summarization, verify storage."""
     print("  test_live_full_summarization...", end=" ")
@@ -183,7 +192,7 @@ def test_live_full_summarization():
     ]
 
     # Repeat topics with variation to build up volume
-    for cycle in range(15):
+    for cycle in range(30):
         for i, topic in enumerate(topics):
             role = "user" if i % 2 == 0 else "assistant"
             content = f"{topic} (Conversation cycle {cycle}, point {i})"
@@ -191,7 +200,7 @@ def test_live_full_summarization():
 
     # Now trigger summarization
     result = summarizer.check_and_summarize(mem)
-    assert result is True, "Summarization should have triggered"
+    assert result > 0, "Summarization should have triggered"
 
     # Verify a summary was stored
     summaries = mem.get_all_summaries()
@@ -263,8 +272,8 @@ if __name__ == "__main__":
         skipped = len(live_tests)
         print(
             f"  Skipping {skipped} live test(s) — Ollama not available.\n"
-            f"  To run: ollama serve (with both {summarizer.SUMMARIZE_PROVIDER} "
-            f"model and nomic-embed-text pulled)\n"
+            "  To run: set PURCIVAL_RUN_LIVE_TESTS=1 and start Ollama "
+            "with the summary and embedding models pulled.\n"
         )
 
     cleanup()
