@@ -1,0 +1,122 @@
+"""Dashboard routes for seed-backed Goals dashboard rendering."""
+
+from __future__ import annotations
+
+import os
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, Request
+from fastapi.templating import Jinja2Templates
+
+from goals import SharedGoalStore
+
+
+TEMPLATE_DIR = Path(__file__).parent / "templates"
+
+router = APIRouter()
+templates = Jinja2Templates(directory=TEMPLATE_DIR)
+
+
+def get_store() -> SharedGoalStore:
+    db_path = os.environ.get("PURCIVAL_GOALS_DB")
+    return SharedGoalStore(Path(db_path)) if db_path else SharedGoalStore()
+
+
+def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
+    goals = store.list_goals(status="active")
+    steps = store.list_steps()
+    steps_by_goal: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for step in steps:
+        steps_by_goal[step["goal_id"]].append(step)
+
+    goal_cards = []
+    for goal in goals:
+        goal_steps = steps_by_goal.get(goal["id"], [])
+        suggested = [step for step in goal_steps if step["status"] == "suggested"]
+        accepted = [step for step in goal_steps if step["status"] == "accepted"]
+        goal_cards.append({
+            **goal,
+            "suggested_count": len(suggested),
+            "accepted_count": len(accepted),
+            "highlight_step": suggested[0] if suggested else accepted[0] if accepted else None,
+        })
+
+    categories: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for goal in goal_cards:
+        categories[goal["category"]].append(goal)
+
+    suggestions = [
+        {
+            **step,
+            "goal": next(
+                (goal for goal in goals if goal["id"] == step["goal_id"]),
+                None,
+            ),
+        }
+        for step in steps
+        if step["status"] == "suggested"
+    ]
+
+    accepted_steps = [
+        {
+            **step,
+            "goal": next(
+                (goal for goal in goals if goal["id"] == step["goal_id"]),
+                None,
+            ),
+        }
+        for step in steps
+        if step["status"] == "accepted"
+    ]
+
+    active_context = suggestions[0] if suggestions else accepted_steps[0] if accepted_steps else None
+
+    return {
+        "categories": dict(categories),
+        "goals": goal_cards,
+        "suggestions": suggestions,
+        "accepted_steps": accepted_steps,
+        "active_context": active_context,
+    }
+
+
+@router.get("/")
+def index(request: Request):
+    model = build_dashboard_model(get_store())
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        model,
+    )
+
+
+@router.get("/partials/goals")
+def goal_strip(request: Request):
+    model = build_dashboard_model(get_store())
+    return templates.TemplateResponse(
+        request,
+        "partials/goal_strip.html",
+        model,
+    )
+
+
+@router.get("/partials/suggestions")
+def suggestion_strip(request: Request):
+    model = build_dashboard_model(get_store())
+    return templates.TemplateResponse(
+        request,
+        "partials/suggestion_strip.html",
+        model,
+    )
+
+
+@router.get("/partials/chat")
+def chat_panel(request: Request):
+    model = build_dashboard_model(get_store())
+    return templates.TemplateResponse(
+        request,
+        "partials/chat_panel.html",
+        model,
+    )

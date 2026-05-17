@@ -1,0 +1,12 @@
+<section class="suggestion-strip" aria-labelledby="suggestions-heading">
+  <div class="section-heading">
+    <p class="eyebrow">Today</p>
+    <h2 id="suggestions-heading">Suggested Steps</h2>
+  </div>
+
+  <div class="step-grid">
+    {% for step in suggestions %}
+      {% include "partials/step_card.html" %}
+    {% endfor %}
+  </div>
+</section>

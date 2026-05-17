@@ -34,7 +34,7 @@ Reference design docs:
 - `Design/PURCIVAL_DESIGN_DOC.md` — overall system design (living)
 - `Design/agent_loop_design.md` — agent loop architecture
 - `Design/openai_integration_design.md` — completed OpenAI work
-- `Design/dashboard_goals_design.md` — Goals dashboard design (Phase 2 dashboard skeleton next)
+- `Design/dashboard_goals_design.md` — Goals dashboard design
 - `README.md` — project overview and setup
 
 ---

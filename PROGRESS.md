@@ -11,7 +11,7 @@ agent sessions. Read it in full each session. Update sections marked
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
 **Phase:** 2 — Dashboard skeleton
-**Status:** Phase 1 data layer complete and full test baseline clean; ready to begin screenshot-driven dashboard skeleton
+**Status:** Phase 2 dashboard skeleton implemented with desktop/mobile screenshots captured; awaiting Zach's visual identity review
 
 ---
 
@@ -135,7 +135,7 @@ answer in the design doc, Zach reviews.)
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-- Phase 2 / Goals dashboard — next review gate is the dashboard skeleton screenshot and cyberpunk visual identity. Data-layer direction is implemented and tested; Phase 2 should render from seed data only, with no accept/reject or chat behavior yet.
+- Phase 2 / Goals dashboard — review the dashboard skeleton screenshots and cyberpunk visual identity. The skeleton renders seeded goals and suggested steps only; accept/reject and scoped chat behavior remain Phase 3+ work.
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -150,6 +150,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-17 — Goals dashboard Phase 2 — implemented the FastAPI/Jinja dashboard skeleton, cyberpunk CSS theme, static Jo chat panel, dashboard route tests, and desktop/mobile Playwright screenshots — committed.
 - 2026-05-17 — Test baseline cleanup — marked live OpenAI / Google / Ollama tests as opt-in, updated stale proactive and summarizer tests, and restored full pytest to passing — committed.
 - 2026-05-17 — Goals dashboard Phase 1 — implemented shared `data/user.db` goal storage, scoped persona messages/summaries, scoped summarization/context hooks, idempotent mockup seed data, and focused data-layer tests — committed.
 - 2026-05-17 — Documentation consistency — renamed the agent loop design doc, rewrote stale README and overall design handoff for Windows / Jo-only / inactive Telegram context, and removed active numbered-agent terminology — uncommitted.

@@ -1,0 +1,33 @@
+<aside class="chat-panel" aria-label="Focused Jo chat">
+  <div class="chat-panel__header">
+    <div>
+      <p class="eyebrow">Focused Chat</p>
+      <h2>Jo</h2>
+    </div>
+    <button type="button" class="panel-toggle" disabled aria-label="Collapse chat panel">
+      <span></span>
+    </button>
+  </div>
+
+  <div class="context-card">
+    {% if active_context and active_context.goal %}
+      <span class="card-tag card-tag--small">{{ active_context.goal.category }}</span>
+      <h3>{{ active_context.goal.title }}</h3>
+      <p>{{ active_context.title }}</p>
+    {% else %}
+      <span class="card-tag card-tag--small">default</span>
+      <h3>Choose a goal or step</h3>
+      <p>Jo will keep the conversation scoped to that context.</p>
+    {% endif %}
+  </div>
+
+  <div class="message-stack" aria-label="Chat preview">
+    {% include "partials/chat_message.html" %}
+  </div>
+
+  <form class="composer" aria-label="Chat composer">
+    <label for="chat-message">Message Jo</label>
+    <textarea id="chat-message" name="message" rows="4" disabled></textarea>
+    <button type="button" disabled>Send</button>
+  </form>
+</aside>

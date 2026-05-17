@@ -216,7 +216,7 @@ by git.
 
 ## Goals Dashboard
 
-Current phase: Phase 2 dashboard skeleton.
+Current phase: Phase 2 dashboard skeleton implemented; visual review pending.
 
 Canonical design doc:
 
@@ -234,8 +234,28 @@ Planned implementation phases:
 - Phase 6: accountability.
 - Phase 7: feedback-loop polish.
 
-Phase 1 data storage and scoped memory are implemented. No dashboard UI has
-shipped yet; Phase 2 starts with the screenshot-driven dashboard skeleton.
+Phase 1 data storage and scoped memory are implemented. Phase 2 adds the
+seed-backed FastAPI/Jinja dashboard skeleton and screenshot workflow.
+
+Run the local dashboard:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python scripts\seed_dev_data.py --reset
+python -m uvicorn dashboard.app:app --reload
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000
+```
+
+Capture dashboard screenshots:
+
+```powershell
+python scripts\capture_dashboard_screenshot.py
+```
 
 ## Project Structure
 
@@ -252,6 +272,7 @@ Purcival/
   proactive.py
   summarizer.py
   telegram_bot.py
+  dashboard/
   tools/
   personas/
   Design/

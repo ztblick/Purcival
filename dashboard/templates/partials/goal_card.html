@@ -1,0 +1,15 @@
+<article class="goal-card" data-goal-id="{{ goal.id }}">
+  <div class="card-tag">{{ goal.category }}</div>
+  <div class="goal-card__body">
+    <h3>{{ goal.title }}</h3>
+    {% if goal.highlight_step %}
+      <p>{{ goal.highlight_step.title }}</p>
+    {% else %}
+      <p>Ready for Jo to suggest a concrete next step.</p>
+    {% endif %}
+  </div>
+  <footer class="card-meta">
+    <span>{{ goal.suggested_count }} suggested</span>
+    <span>{{ goal.accepted_count }} accepted</span>
+  </footer>
+</article>

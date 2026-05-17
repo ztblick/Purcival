@@ -1,0 +1,14 @@
+<section class="goal-strip" aria-labelledby="goals-heading">
+  <div class="section-heading">
+    <p class="eyebrow">Categories</p>
+    <h2 id="goals-heading">Goals</h2>
+  </div>
+
+  <div class="goal-grid">
+    {% for category, category_goals in categories.items() %}
+      {% for goal in category_goals %}
+        {% include "partials/goal_card.html" %}
+      {% endfor %}
+    {% endfor %}
+  </div>
+</section>
