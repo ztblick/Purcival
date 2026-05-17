@@ -1,8 +1,8 @@
 # Goals Dashboard Design
 
-**Status:** Phase 4.2 dashboard layout polish complete; Phase 5 ready for next development cycle
+**Status:** Phase 5 agent suggestion generation complete; Phase 6 ready for next development cycle
 **Date:** 2026-05-17
-**Phase:** 4 - Chat-on-step and chat-on-goal
+**Phase:** 5 - Agent suggestion generation
 **Scope:** shared goal state, scoped conversations, dashboard UI, and agent integration
 
 ---
@@ -813,7 +813,10 @@ loads older scoped messages lazily as Zach scrolls up, and shows inherited
 goal categories on step cards. Phase 4.2 moved the scoped goal/step context
 directly beside the bottom text input so the chat history gets more vertical
 space.
-Phase 5 should begin in the next development cycle.
+Phase 5 is complete: the agent loop registers goal and suggestion tools, the
+planning prompt asks for at most 1-3 one-shot suggestions during planning
+cycles, and suggested steps created by the agent land in `data/user.db` for the
+dashboard to render.
 
 ---
 
@@ -919,7 +922,7 @@ Reason:
 
 ### Phase 5 - Agent suggestion generation
 
-Implement:
+Implemented:
 
 - `GoalTool`.
 - `SuggestionTool`.
@@ -927,10 +930,12 @@ Implement:
 - Planning prompt additions.
 - Suggestion insertion into `steps`.
 
-Acceptance:
+Acceptance met:
 
-- Real planning cycle creates sensible `suggested` steps.
-- Dashboard shows them within seconds.
+- A real agent-cycle execution path can create `suggested` steps through
+  `suggestions.propose_suggestion`.
+- Dashboard model rendering includes the new suggested step immediately after
+  it is written to the shared goal store.
 
 ### Phase 6 - Accountability
 

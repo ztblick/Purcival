@@ -10,8 +10,8 @@ agent sessions. Read it in full each session. Update sections marked
 
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
-**Phase:** 5 — Agent loop integration: suggestion generation (ready for next development cycle)
-**Status:** Phase 4.2 layout polish complete. Step cards show the inherited goal category tag, focused chat history scrolls inside the chat panel, older scoped messages load lazily as Zach scrolls upward, and the scoped goal/step context now sits directly beside the bottom text input so more recent messages fit onscreen. Phase 5 remains the next substantive development phase.
+**Phase:** 6 — Accountability (ready for next development cycle)
+**Status:** Phase 5 agent suggestion generation complete. The agent loop now registers goal and suggestion tools, planning cycles are explicitly instructed to propose at most 1-3 concrete one-shot suggestions tied to active goals, and `suggestions.propose_suggestion` writes `steps.status='suggested'` / `source='agent_planning'` rows that the dashboard renders immediately. Phase 6 is the next substantive development phase.
 
 ---
 
@@ -150,7 +150,7 @@ answer in the design doc, Zach reviews.)
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-(None pending. Phase 4.1 is complete; Phase 5 is ready for the next development cycle.)
+(None pending. Phase 5 is complete; Phase 6 is ready for the next development cycle.)
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -165,6 +165,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-17 - Goals dashboard Phase 5 - added GoalTool and SuggestionTool, registered them with the agent loop, planning-gated suggestion generation, and verified a planning cycle can create dashboard-visible suggested steps - committed.
 - 2026-05-17 - Goals dashboard bottom input polish - moved the scoped goal/step context directly beside the bottom text input at roughly 25/75 width so the chat history can show more messages - committed.
 - 2026-05-17 - Goals dashboard usability polish - added inherited category tags to step cards, pinned the chat composer while history scrolls inside the panel, added scoped message pagination for lazy upward loading, and documented step-category editing as design-gated - committed.
 - 2026-05-17 — Goals dashboard Markdown and streaming — added dependency-free Markdown rendering for scoped chat messages, provider-native `brain.stream()` handlers for ChatGPT, Claude, and Ollama with fallback, per-chunk SSE delivery, and regression coverage — committed.

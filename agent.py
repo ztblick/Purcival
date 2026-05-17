@@ -125,6 +125,7 @@ def _build_agent_prompt(
     available_actions: str,
     schedule_config: dict | None,
     actions_today: int,
+    is_planning: bool = False,
 ) -> str:
     """
     Assemble the full system prompt for the agent reasoning call.
@@ -193,7 +194,34 @@ def _build_agent_prompt(
             )
         sections.append("## PENDING PROPOSALS\n\n" + "\n".join(proposal_lines))
 
-    # 9. Available actions + budget + JSON format instructions
+    # 9. Goal suggestion policy
+    if is_planning:
+        sections.append(
+            "## GOAL SUGGESTION POLICY\n\n"
+            "This is a planning cycle. Review Zach's active goals, accepted "
+            "steps, open suggestions, and recent accept/reject signal.\n\n"
+            "If you see a useful next step, propose 1-3 concrete one-shot "
+            "suggestions tied to specific existing goals. At most 3 new "
+            "suggestions in this cycle; fewer is better than noise, and zero "
+            "is acceptable when nothing is worth adding.\n\n"
+            "Use suggestions.propose_suggestion for candidate steps. Do not "
+            "propose new goals. Do not use web search or external facts you "
+            "do not already have. Prefer small, checkable steps Zach can "
+            "accept or reject. Avoid duplicates of existing suggested, "
+            "accepted, completed, or recently rejected steps."
+        )
+    else:
+        sections.append(
+            "## GOAL SUGGESTION POLICY\n\n"
+            "This is not a planning cycle. Do not propose new goal "
+            "suggestions unless the trigger purpose explicitly asks for "
+            "suggestion bookkeeping. If accepted steps appear in context, "
+            "use them for relevant accountability without nagging. Do not "
+            "mark a step completed or abandoned without explicit user "
+            "confirmation."
+        )
+
+    # 10. Available actions + budget + JSON format instructions
     budget_info = ""
     if schedule_config:
         max_actions = schedule_config.get("max_actions_per_day", 25)
@@ -411,6 +439,7 @@ async def run_agent_cycle(
         available_actions=available_actions,
         schedule_config=schedule_config,
         actions_today=actions_today,
+        is_planning=is_planning,
     )
 
     _, messages = assemble_context(persona_prompt, memory, device=DEVICE_TELEGRAM)

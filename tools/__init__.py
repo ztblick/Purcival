@@ -4,6 +4,8 @@ Tool registry — discovers and manages available tools.
 
 import logging
 from tools.base import Tool
+from goals import SharedGoalStore
+from tools.goal_tools import GoalTool, SuggestionTool
 from tools.schedule_tool import ScheduleTool
 from tools.telegram_tool import TelegramTool
 from memory import PersonaMemory
@@ -11,9 +13,19 @@ from memory import PersonaMemory
 logger = logging.getLogger(__name__)
 
 
-def create_tools(memory: PersonaMemory, send_fn=None) -> dict[str, Tool]:
+def create_tools(
+    memory: PersonaMemory,
+    send_fn=None,
+    goal_store: SharedGoalStore | None = None,
+) -> dict[str, Tool]:
     tools = {}
     tools["schedule"] = ScheduleTool(memory)
+    store = goal_store or SharedGoalStore()
+    tools["goals"] = GoalTool(store)
+    tools["suggestions"] = SuggestionTool(
+        store,
+        created_by_persona=memory.persona_name,
+    )
     if send_fn is not None:
         tools["telegram"] = TelegramTool(send_fn)
     try:
