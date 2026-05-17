@@ -11,7 +11,7 @@ agent sessions. Read it in full each session. Update sections marked
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
 **Phase:** 2 — Dashboard skeleton
-**Status:** Phase 2 dashboard skeleton polished after Zach's first visual review; updated desktop/mobile screenshots captured; awaiting final Phase 2 visual approval
+**Status:** Phase 2 dashboard skeleton revised to chat-first layout after Zach's second visual review; updated desktop/mobile screenshots captured; awaiting final Phase 2 visual approval
 
 ---
 
@@ -135,7 +135,7 @@ answer in the design doc, Zach reviews.)
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-- Phase 2 / Goals dashboard — review the polished dashboard screenshots and cyberpunk visual identity. Zach's first notes were applied: smaller rotating title text, fixed category colors, and goal-level "steps in progress" counts. The skeleton still renders seeded goals and suggested steps only; accept/reject and scoped chat behavior remain Phase 3+ work.
+- Phase 2 / Goals dashboard — review the chat-first dashboard screenshots and cyberpunk visual identity. Zach's notes were applied: once-per-day motivational title, fixed category colors, no visible seed-source tags, no manual accept/reject controls in the skeleton, larger focused Jo chat, and goal-level "steps in progress" counts. The skeleton still renders seeded goals and suggested steps only; real chat-driven mutations remain Phase 4+ work.
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -150,7 +150,8 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
-- 2026-05-17 — Goals dashboard Phase 2 visual polish — reduced the header title size, added rotating motivational title phrases, assigned stable category colors, replaced goal suggested/accepted counts with steps-in-progress counts, refreshed screenshots, and kept full pytest passing — committed.
+- 2026-05-17 — Goals dashboard Phase 2 chat-first polish — changed the motivational title to once-per-day selection, removed visible seed-source tags and manual step buttons, enlarged the Jo chat workspace, moved steps into a secondary context rail, refreshed screenshots, and kept dashboard tests passing — committed.
+- 2026-05-17 — Goals dashboard Phase 2 visual polish — reduced the header title size, added rotating motivational title phrases, assigned stable category colors, replaced goal suggested/accepted counts with steps-in-progress counts, refreshed screenshots, and kept full pytest passing — e7d3288.
 - 2026-05-17 — Goals dashboard Phase 2 — implemented the FastAPI/Jinja dashboard skeleton, cyberpunk CSS theme, static Jo chat panel, dashboard route tests, and desktop/mobile Playwright screenshots — e8fd5fe.
 - 2026-05-17 — Test baseline cleanup — marked live OpenAI / Google / Ollama tests as opt-in, updated stale proactive and summarizer tests, and restored full pytest to passing — committed.
 - 2026-05-17 — Goals dashboard Phase 1 — implemented shared `data/user.db` goal storage, scoped persona messages/summaries, scoped summarization/context hooks, idempotent mockup seed data, and focused data-layer tests — committed.
@@ -184,6 +185,7 @@ Append entries; never edit prior ones.
 - **2026-05-17 — Agent loop design doc renamed.** The old numbered agent design doc became `Design/agent_loop_design.md` to avoid confusing the completed agent architecture with future numbered Goals dashboard phases.
 - **2026-05-17 — Goals dashboard Phase 1 began from the approved Phase 0 design.** Zach explicitly asked to begin Phase 1 after reviewing the dashboard design and mockup direction. Implementation follows the approved `data/user.db` + typed message scope design.
 - **2026-05-17 — Live integration tests are opt-in during dashboard design.** OpenAI, Google Calendar, and live Ollama summarization tests are skipped by default under pytest. Run them with `PURCIVAL_RUN_LIVE_TESTS=1` plus the relevant API keys, credentials, or local services. This keeps dashboard data/UI work from being blocked by secondary integrations.
+- **2026-05-17 — Goals dashboard is chat-first.** Zach clarified that chatting with Jo is the main way goals, suggestions, and steps should change. Dashboard goal/step controls should stay limited; manual editing is not the product center.
 
 ---
 

@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.templating import Jinja2Templates
 
-from dashboard.motivation import MOTIVATIONAL_TITLES
+from dashboard.motivation import MOTIVATIONAL_TITLES, title_for_date
 from goals import SharedGoalStore
 
 
@@ -69,7 +69,7 @@ def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
         "accepted_steps": accepted_steps,
         "active_context": active_context,
         "motivational_titles": MOTIVATIONAL_TITLES,
-        "initial_title": MOTIVATIONAL_TITLES[0],
+        "initial_title": title_for_date(),
     }
 
 

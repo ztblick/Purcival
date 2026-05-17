@@ -7,10 +7,8 @@
     <p>{{ step.rationale }}</p>
   {% endif %}
   <div class="step-card__footer">
-    <div class="ghost-actions" aria-label="Step actions">
-      <button type="button" disabled>Accept</button>
-      <button type="button" disabled>Reject</button>
-    </div>
-    <span class="source-label">{{ step.source }}</span>
+    {% if step.goal %}
+      <span>{{ step.goal.title }}</span>
+    {% endif %}
   </div>
 </article>

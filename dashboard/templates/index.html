@@ -2,22 +2,22 @@
 
 {% block body %}
 <main class="dashboard-shell">
-  <section class="workspace" aria-label="Goals dashboard">
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">Purcival / Jo</p>
-        <h1 data-title-rotator data-phrases="{{ motivational_titles|tojson|forceescape }}">{{ initial_title }}</h1>
-      </div>
-      <div class="status-cluster" aria-label="Dashboard status">
-        <span class="status-pill">Seed view</span>
-        <span class="status-pill status-pill--hot">{{ goals|length }} goals</span>
-      </div>
-    </header>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Purcival / Jo</p>
+      <h1>{{ initial_title }}</h1>
+    </div>
+    <div class="status-cluster" aria-label="Dashboard status">
+      <span class="status-pill">Seed view</span>
+      <span class="status-pill status-pill--hot">{{ goals|length }} goals</span>
+    </div>
+  </header>
 
-    {% include "partials/goal_strip.html" %}
+  {% include "partials/goal_strip.html" %}
+
+  <section class="dashboard-workbench" aria-label="Goals and Jo chat workspace">
     {% include "partials/suggestion_strip.html" %}
+    {% include "partials/chat_panel.html" %}
   </section>
-
-  {% include "partials/chat_panel.html" %}
 </main>
 {% endblock %}

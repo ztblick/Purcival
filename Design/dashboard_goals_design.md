@@ -1,6 +1,6 @@
 # Goals Dashboard Design
 
-**Status:** Phase 2 skeleton polished; visual review pending
+**Status:** Phase 2 chat-first skeleton polished; visual review pending
 **Date:** 2026-05-17
 **Phase:** 2 - Dashboard skeleton
 **Scope:** shared goal state, scoped conversations, dashboard UI, and agent integration
@@ -775,9 +775,16 @@ CSS should start with custom properties:
 Layout:
 
 - Top strip: goal categories and active goals.
-- Middle strip: suggested and accepted steps.
-- Right panel: collapsible focused chat.
+- Main work area: large focused Jo chat.
+- Secondary rail: suggested and accepted steps as context.
+- Goal and step cards use stable category accent colors.
+- Dashboard title changes once per calendar day, not on a timer.
 - Mobile: stack strips vertically and turn chat into a full-width drawer.
+
+Phase 2 visual review moved the dashboard toward a chat-first layout: goals and
+steps remain visible context, but the primary action is talking with Jo. Manual
+goal/step editing controls should stay minimal because Jo is expected to create
+and revise goals and steps through conversation.
 
 Phase 2 acceptance is screenshot-driven. Do not bury visual decisions in code without showing Zach.
 
