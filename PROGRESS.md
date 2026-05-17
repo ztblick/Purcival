@@ -10,8 +10,8 @@ agent sessions. Read it in full each session. Update sections marked
 
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
-**Phase:** 6 — Accountability (ready for next development cycle)
-**Status:** Phase 5 agent suggestion generation complete. The agent loop now registers goal and suggestion tools, planning cycles are explicitly instructed to propose at most 1-3 concrete one-shot suggestions tied to active goals, and `suggestions.propose_suggestion` writes `steps.status='suggested'` / `source='agent_planning'` rows that the dashboard renders immediately. Phase 6 is the next substantive development phase.
+**Phase:** 5 adjunct — Step category editing design (awaiting Zach review)
+**Status:** Phase 5 agent suggestion generation is complete. The remaining Phase 5 adjunct item is editable step categories. Because steps currently inherit category through their parent goal, the proposed design treats category changes as moving a step to another active goal; see `Design/dashboard_goals_design.md` → "Phase 5 adjunct - Step category editing design." No production code should be written for this adjunct until Zach approves or redirects the design.
 
 ---
 
@@ -118,13 +118,12 @@ Acceptance: a real planning cycle produces sensible suggestions visible on the d
   scoped messages when Zach scrolls upward.
 - The scoped goal/step context now sits directly beside the bottom text input,
   roughly 25% context and 75% input row, to reclaim vertical chat space.
-- Defer clickable step-category reassignment until after Phase 5 unless it
-  becomes a blocker; it changes more than presentation because categories
-  currently belong to goals, not steps.
-- Design step-level categories before implementation. The design should decide
-  whether changing a step category moves the step to another goal, adds an
-  independent step category field, introduces a categories table, or supports a
-  many-to-many step/category join table for multiple categories.
+- Clickable step-category reassignment is now design-gated in
+  `Design/dashboard_goals_design.md`: the proposed v1 behavior is moving the
+  step to another active goal, preserving goal-owned categories.
+- Do not add an independent step category field, categories table, or
+  many-to-many step/category join table unless Zach rejects the proposed
+  goal-move design.
 
 **Phase 6 — Accountability**
 
@@ -150,7 +149,13 @@ answer in the design doc, Zach reviews.)
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-(None pending. Phase 5 is complete; Phase 6 is ready for the next development cycle.)
+- **Phase 5 adjunct / step category editing** — approve or reject the proposed
+  v1 behavior: clicking a step category tag moves the step to another active
+  goal, so the category changes through the existing `category -> goal -> step`
+  hierarchy. Rationale: this preserves the locked data model and avoids adding
+  premature taxonomy infrastructure. Design path:
+  `Design/dashboard_goals_design.md` → "Phase 5 adjunct - Step category editing
+  design."
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -165,6 +170,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-17 - Goals dashboard step-category design - proposed treating editable step categories as moving a step to another active goal, preserving goal-owned categories and deferring independent step taxonomy - awaiting review.
 - 2026-05-17 - Goals dashboard Phase 5 - added GoalTool and SuggestionTool, registered them with the agent loop, planning-gated suggestion generation, and verified a planning cycle can create dashboard-visible suggested steps - committed.
 - 2026-05-17 - Goals dashboard bottom input polish - moved the scoped goal/step context directly beside the bottom text input at roughly 25/75 width so the chat history can show more messages - committed.
 - 2026-05-17 - Goals dashboard usability polish - added inherited category tags to step cards, pinned the chat composer while history scrolls inside the panel, added scoped message pagination for lazy upward loading, and documented step-category editing as design-gated - committed.
