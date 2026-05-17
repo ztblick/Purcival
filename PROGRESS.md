@@ -8,10 +8,10 @@ agent sessions. Read it in full each session. Update sections marked
 
 ## Current focus                                          *updatable*
 
-**Last updated:** 2026-05-16
+**Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
 **Phase:** 0 — Design (no production code yet)
-**Status:** Constraints confirmed, awaiting Phase 0 design doc from next agent session
+**Status:** Phase 0 design doc drafted in `Design/dashboard_goals_design.md`; awaiting Zach review before Phase 1
 
 ---
 
@@ -67,7 +67,7 @@ Each phase ships independently testable behavior. Don't merge phases.
 
 **Phase 0 — Design**
 
-Read the codebase (especially `agent.py`, `brain.py`, `memory.py`, the tool registry, and the existing persona/message infrastructure). Produce `docs/dashboard_goals_design.md` covering:
+Read the codebase (especially `agent.py`, `brain.py`, `memory.py`, the tool registry, and the existing persona/message infrastructure). Produce `Design/dashboard_goals_design.md` covering:
 
 - Data models for `goals`, `steps`, `step_feedback`, and the message-scoping mechanism
 - Database layout: where is the new shared DB, how does it relate to per-persona memory DBs, how are cross-DB references handled (likely application-level, no FK constraints)
@@ -135,7 +135,7 @@ answer in the design doc, Zach reviews.)
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-(None pending.)
+- Phase 0 / Goals dashboard — approve `Design/dashboard_goals_design.md` as the basis for Phase 1. Proposed direction: store shared goals/steps/feedback in `data/user.db`; add typed `scope_type` + `scope_id` columns to persona `messages` and `summaries`; keep dashboard chats in Jo's existing memory infrastructure; register `GoalTool` and `SuggestionTool` through the existing Stage 5 tool registry.
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -150,6 +150,8 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-17 — Goals dashboard Phase 0 — drafted `Design/dashboard_goals_design.md` covering shared goal schema, scoped chat architecture, tool integration, dashboard UI routes, SSE chat flow, and test strategy — uncommitted.
+- 2026-05-17 — Project docs — normalized operating docs to `AGENTS.md`, moved design-doc references to `Design/`, and logged Telegram `/status` provider-model drift for later fix — uncommitted.
 - 2026-05-16 — Goals dashboard project — scoped, phased, constraints locked. New active project. Phase 0 awaiting first session.
 - 2026-05-16 — ChatGPT integration — Implemented: brain.py (task dispatch + chatgpt provider + ollama fallback), config.py (per-task models for all 3 providers), agent.py/summarizer.py (task= param), main.py (/chatgpt switch), tests/test_brain_chatgpt.py (16/16 pass). max_completion_tokens fix applied from live API feedback.
 
@@ -173,6 +175,7 @@ Append entries; never edit prior ones.
 - **2026-05-16 — Terminology: "step", not "task".** Each step has an id and belongs to exactly one goal. Goals belong to one category. Three-level hierarchy: category → goal → step.
 - **2026-05-16 — Primary persona for the dashboard is Jo.** Other personas can read goals and steps but Jo is the default for chat-on-step and suggestion generation.
 - **2026-05-16 — Step chats are scope-tagged within Purcival's existing message infrastructure.** The leading proposal for Phase 0: add a `scope` (or `entity_type` + `entity_id`) column to `messages`; null = default chat, `step:N` = step-scoped. Summarization and retrieval honor scope. Design phase confirms exact shape.
+- **2026-05-17 — Design documents live under `Design/`.** Zach clarified that all design documents should be referenced from the `Design/` directory. Operational instructions live in `AGENTS.md`.
 
 ---
 
@@ -181,10 +184,11 @@ Append entries; never edit prior ones.
 ### Known issues
 
 - **Trigger-deletion bug.** Some agent-scheduled triggers have been found deleted between cycles with no corresponding cancel commands in the reasoning log. Root cause unknown. Investigation, not a quick patch.
+- **Telegram `/status` model display drift.** `telegram_bot.py` still references removed `config.CLAUDE_MODEL` / `config.OLLAMA_MODEL` names after the per-task provider refactor. Fix later by routing status display through the same task-model lookup used by the CLI.
 
 ### Deferred work (related to current and recent projects)
 
-- **OpenAI o-series reasoning models** (o3, o4-mini). Requires handling reasoning tokens, different system-prompt semantics, possibly the Responses API. Path documented in `docs/openai_integration_design.md`.
+- **OpenAI o-series reasoning models** (o3, o4-mini). Requires handling reasoning tokens, different system-prompt semantics, possibly the Responses API. Path documented in `Design/openai_integration_design.md`.
 - **Mixing providers across call sites** (e.g., Anthropic for reasoning, OpenAI for chat). The handler/model tables in `brain.py` already support it; just needs per-call-site overrides in config.
 - **Web search tool** for the agent — would unlock proactive suggestions like "Yoga6 has a 6pm class today, want me to put it on your calendar?" Needs its own design phase: generic URL fetch + extraction vs. search engine API vs. browser automation; rate limiting; caching; cost; trust boundary for arbitrary URL fetching.
 - **AI-proposed goals.** Right now goals are user-created. Purcival proposing goals from observed conversation patterns is a future feature; moves the trust boundary, defer.
@@ -199,11 +203,11 @@ Append entries; never edit prior ones.
 
 ## Reference docs (read these for context)
 
-- `CLAUDE.md` — operating manual (this file's companion). If you're working with Codex, the same content may be present as `AGENTS.md`; both refer to the same conventions.
-- `PURCIVAL_DESIGN_DOC.md` — overall system design (living)
-- `STAGE5_AGENT_DESIGN.md` — agent loop architecture
-- `docs/openai_integration_design.md` — OpenAI integration design (completed)
-- `docs/dashboard_goals_design.md` — Goals dashboard design (Phase 0 deliverable, not yet written)
+- `AGENTS.md` — operating manual
+- `Design/PURCIVAL_DESIGN_DOC.md` — overall system design (living)
+- `Design/STAGE5_AGENT_DESIGN.md` — agent loop architecture
+- `Design/openai_integration_design.md` — OpenAI integration design (completed)
+- `Design/dashboard_goals_design.md` — Goals dashboard design (Phase 0 draft awaiting review)
 - `README.md` — project overview and setup
 
 If any of these go stale because of changes you make, update them in the same session.

@@ -147,7 +147,8 @@ purcival/
 │   └── test_stage5.py   60 tests for agent cycle, tools, parsing, validation
 ├── purcival@.service    Systemd template unit (uses %i for persona name)
 ├── requirements.txt     Python dependencies
-├── STAGE5_AGENT_DESIGN.md  Design document for the self-scheduling agent
+├── Design/
+│   └── STAGE5_AGENT_DESIGN.md  Design document for the self-scheduling agent
 ├── .env.example         Configuration template
 ├── .env                 Actual secrets (gitignored)
 └── .gitignore           Excludes .env, venv/, __pycache__/, data/, debug/

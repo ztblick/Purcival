@@ -1,11 +1,8 @@
-# CLAUDE.md — Purcival
+# AGENTS.md — Purcival
 
 You are an AI coding agent working on Purcival — a self-hosted multi-persona
 AI assistant owned by Zach. This file is your operating manual. Read it in
 full at the start of every session, then read PROGRESS.md.
-
-This file is named `CLAUDE.md` by convention; the same content also lives at
-`AGENTS.md` for Codex compatibility. Both files should stay in sync.
 
 ---
 
@@ -33,10 +30,10 @@ PROGRESS.md → Current focus.
 
 Reference design docs:
 
-- `PURCIVAL_DESIGN_DOC.md` — overall system design (living)
-- `STAGE5_AGENT_DESIGN.md` — agent loop architecture
-- `docs/openai_integration_design.md` — completed OpenAI work
-- `docs/dashboard_goals_design.md` — Goals dashboard (Phase 0 deliverable, in progress)
+- `Design/PURCIVAL_DESIGN_DOC.md` — overall system design (living)
+- `Design/STAGE5_AGENT_DESIGN.md` — agent loop architecture
+- `Design/openai_integration_design.md` — completed OpenAI work
+- `Design/dashboard_goals_design.md` — Goals dashboard (Phase 0 deliverable, in progress)
 - `README.md` — project overview and setup
 
 ---
@@ -70,7 +67,7 @@ How to work with him:
 
 ## Workflow — every session
 
-1. Read CLAUDE.md.
+1. Read AGENTS.md.
 2. Read PROGRESS.md.
 3. Read recent commits: `git log --oneline -20`.
 4. Identify the active task from PROGRESS.md → Current focus.
@@ -141,7 +138,7 @@ How to work with him:
 
 (These commands get verified and updated on the first session you do work in
 this codebase. If something doesn't work as written, fix the command and
-update CLAUDE.md.)
+update AGENTS.md.)
 
 - Tests: `pytest`
 - Specific tests: `pytest path/to/test_file.py::test_name`
