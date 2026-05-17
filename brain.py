@@ -22,6 +22,7 @@ Architecture note:
     The "memory" lives in our code, not in the model.
 """
 
+import json
 import logging
 import requests
 import config
@@ -59,6 +60,25 @@ def _ask_claude(messages: list[dict], system: str, max_tokens: int, model: str) 
     return response.content[0].text
 
 
+def _stream_claude(
+    messages: list[dict],
+    system: str,
+    max_tokens: int,
+    model: str,
+) -> Iterator[str]:
+    """Stream messages from Claude via the Anthropic API."""
+    client = _ensure_claude()
+    with client.messages.stream(
+        model=model,
+        max_tokens=max_tokens,
+        system=system,
+        messages=messages,
+    ) as stream:
+        for text in stream.text_stream:
+            if text:
+                yield text
+
+
 # --- ChatGPT Provider ---
 
 _chatgpt_client = None
@@ -93,6 +113,30 @@ def _ask_chatgpt(messages: list[dict], system: str, max_tokens: int, model: str)
     return response.choices[0].message.content
 
 
+def _stream_chatgpt(
+    messages: list[dict],
+    system: str,
+    max_tokens: int,
+    model: str,
+) -> Iterator[str]:
+    """Stream messages from ChatGPT via the OpenAI Chat Completions API."""
+    client = _ensure_chatgpt()
+    full_messages = [{"role": "system", "content": system}] + messages
+    stream = client.chat.completions.create(
+        model=model,
+        max_completion_tokens=max_tokens,
+        messages=full_messages,
+        stream=True,
+    )
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        text = getattr(delta, "content", None)
+        if text:
+            yield text
+
+
 # --- Ollama Provider ---
 
 def _ask_ollama(messages: list[dict], system: str, max_tokens: int, model: str) -> str:
@@ -120,6 +164,47 @@ def _ask_ollama(messages: list[dict], system: str, max_tokens: int, model: str) 
     return data["choices"][0]["message"]["content"]
 
 
+def _stream_ollama(
+    messages: list[dict],
+    system: str,
+    max_tokens: int,
+    model: str,
+) -> Iterator[str]:
+    """Stream messages from Ollama's OpenAI-compatible chat endpoint."""
+    full_messages = [{"role": "system", "content": system}] + messages
+
+    response = requests.post(
+        f"{config.OLLAMA_BASE_URL}/v1/chat/completions",
+        json={
+            "model": model,
+            "messages": full_messages,
+            "max_tokens": max_tokens,
+            "stream": True,
+        },
+        timeout=120,
+        stream=True,
+    )
+    response.raise_for_status()
+
+    for line in response.iter_lines(decode_unicode=True):
+        if not line:
+            continue
+        data = line.removeprefix("data:").strip()
+        if data == "[DONE]":
+            break
+        try:
+            chunk = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        choices = chunk.get("choices") or []
+        if not choices:
+            continue
+        delta = choices[0].get("delta") or {}
+        text = delta.get("content")
+        if text:
+            yield text
+
+
 # --- Dispatch Tables ---
 
 # Maps (provider, task) → callable returning the configured model string.
@@ -142,6 +227,12 @@ _HANDLERS = {
     "claude":  _ask_claude,
     "chatgpt": _ask_chatgpt,
     "ollama":  _ask_ollama,
+}
+
+_STREAM_HANDLERS = {
+    "claude":  _stream_claude,
+    "chatgpt": _stream_chatgpt,
+    "ollama":  _stream_ollama,
 }
 
 
@@ -219,14 +310,50 @@ def stream(
     """
     Yield response text chunks for chat UIs.
 
-    Provider-native streaming can be added behind this interface later. The
-    current implementation preserves a streaming-shaped public API by yielding
-    one full response from ask().
+    Falls back to ask() only when streaming is unavailable before any chunks
+    have been yielded.
     """
-    yield ask(
-        messages=messages,
-        system=system,
-        provider=provider,
-        max_tokens=max_tokens,
-        task=task,
-    )
+    if system is None:
+        raise ValueError("system prompt is required - load a persona first")
+
+    effective = provider or config.DEFAULT_PROVIDER
+    handler = _STREAM_HANDLERS.get(effective)
+
+    if handler is None:
+        logger.warning(f"Unknown provider '{effective}', falling back to ollama")
+        effective = "ollama"
+        handler = _stream_ollama
+
+    model = _resolve_model(effective, task)
+    yielded_any = False
+
+    try:
+        for chunk in handler(messages, system, max_tokens, model):
+            yielded_any = True
+            yield chunk
+    except RuntimeError as e:
+        if yielded_any:
+            raise
+        if effective != "ollama":
+            logger.warning(
+                f"Provider '{effective}' unavailable: {e}. Falling back to ollama."
+            )
+            fallback_model = _resolve_model("ollama", task)
+            for chunk in _stream_ollama(messages, system, max_tokens, fallback_model):
+                yield chunk
+            return
+        raise
+    except Exception as e:
+        if yielded_any:
+            raise
+        logger.warning(
+            f"Provider '{effective}' streaming failed: {e}. "
+            "Falling back to non-streaming response."
+        )
+        yield ask(
+            messages=messages,
+            system=system,
+            provider=provider,
+            max_tokens=max_tokens,
+            task=task,
+        )

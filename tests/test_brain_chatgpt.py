@@ -51,6 +51,17 @@ def _make_mock_anthropic_response(text: str) -> MagicMock:
     return response
 
 
+def _make_mock_openai_stream_chunk(text: str) -> MagicMock:
+    """Build a mock OpenAI stream chunk with delta content."""
+    delta = MagicMock()
+    delta.content = text
+    choice = MagicMock()
+    choice.delta = delta
+    chunk = MagicMock()
+    chunk.choices = [choice]
+    return chunk
+
+
 # ---------------------------------------------------------------------------
 # ChatGPT handler tests
 # ---------------------------------------------------------------------------
@@ -118,6 +129,30 @@ def test_chatgpt_passes_model_and_max_tokens():
     assert kwargs["model"] == "gpt-5.4-mini"
     assert kwargs["max_completion_tokens"] == 512
 
+    print("PASS")
+
+
+def test_chatgpt_stream_yields_delta_text():
+    """_stream_chatgpt should request streaming and yield delta content."""
+    print("  test_chatgpt_stream_yields_delta_text...", end=" ")
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = [
+        _make_mock_openai_stream_chunk("hel"),
+        _make_mock_openai_stream_chunk("lo"),
+    ]
+
+    with patch.object(brain, "_chatgpt_client", mock_client):
+        chunks = list(brain._stream_chatgpt(
+            messages=[{"role": "user", "content": "hi"}],
+            system="sys",
+            max_tokens=100,
+            model="gpt-test",
+        ))
+
+    kwargs = mock_client.chat.completions.create.call_args.kwargs
+    assert kwargs["stream"] is True
+    assert chunks == ["hel", "lo"]
     print("PASS")
 
 
@@ -233,6 +268,33 @@ def test_ollama_uses_per_task_models():
             f"task '{task}': expected {sentinel}, got {payload['model']}"
         )
 
+    print("PASS")
+
+
+def test_ollama_stream_parses_openai_compatible_events():
+    """_stream_ollama should parse SSE-style OpenAI-compatible chunks."""
+    print("  test_ollama_stream_parses_openai_compatible_events...", end=" ")
+
+    with patch("brain.requests") as mock_requests:
+        mock_response = MagicMock()
+        mock_response.iter_lines.return_value = [
+            'data: {"choices": [{"delta": {"content": "hel"}}]}',
+            'data: {"choices": [{"delta": {"content": "lo"}}]}',
+            "data: [DONE]",
+        ]
+        mock_requests.post.return_value = mock_response
+
+        chunks = list(brain._stream_ollama(
+            messages=[{"role": "user", "content": "hi"}],
+            system="sys",
+            max_tokens=100,
+            model="ollama-test",
+        ))
+
+    kwargs = mock_requests.post.call_args.kwargs
+    assert kwargs["stream"] is True
+    assert kwargs["json"]["stream"] is True
+    assert chunks == ["hel", "lo"]
     print("PASS")
 
 
@@ -365,6 +427,27 @@ def test_ask_raises_without_system_prompt():
     print("PASS")
 
 
+def test_stream_falls_back_to_non_streaming_when_provider_stream_fails():
+    """brain.stream should preserve a response if streaming fails before chunks."""
+    print("  test_stream_falls_back_to_non_streaming_when_provider_stream_fails...", end=" ")
+
+    def failing_stream(*args, **kwargs):
+        raise Exception("boom")
+
+    with patch.dict(brain._STREAM_HANDLERS, {"chatgpt": failing_stream}), \
+         patch.dict(brain._HANDLERS, {"chatgpt": lambda *args: "fallback text"}), \
+         patch.object(config, "OPENAI_API_KEY", "test-key"), \
+         patch.object(config, "DEFAULT_PROVIDER", "chatgpt"):
+        chunks = list(brain.stream(
+            [{"role": "user", "content": "hi"}],
+            system="sys",
+            task="chat",
+        ))
+
+    assert chunks == ["fallback text"]
+    print("PASS")
+
+
 # ---------------------------------------------------------------------------
 # Smoke tests (require OPENAI_API_KEY)
 # ---------------------------------------------------------------------------
@@ -432,17 +515,20 @@ if __name__ == "__main__":
         test_chatgpt_sends_system_as_first_message,
         test_chatgpt_returns_response_text,
         test_chatgpt_passes_model_and_max_tokens,
+        test_chatgpt_stream_yields_delta_text,
         test_chatgpt_uses_chat_model_for_chat_task,
         test_chatgpt_uses_summary_model_for_summary_task,
         test_chatgpt_uses_reasoning_model_for_reasoning_task,
         test_claude_uses_per_task_models,
         test_ollama_uses_per_task_models,
+        test_ollama_stream_parses_openai_compatible_events,
         test_falls_back_to_ollama_on_missing_chatgpt_key,
         test_falls_back_to_ollama_on_missing_claude_key,
         test_falls_back_to_ollama_on_unknown_provider,
         test_chatgpt_client_not_initialized_at_import,
         test_ensure_chatgpt_raises_without_key,
         test_ask_raises_without_system_prompt,
+        test_stream_falls_back_to_non_streaming_when_provider_stream_fails,
     ]
 
     smoke_tests = [

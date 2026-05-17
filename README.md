@@ -237,8 +237,8 @@ Planned implementation phases:
 Phase 1 data storage and scoped memory are implemented. Phase 2 added the
 seed-backed FastAPI/Jinja dashboard skeleton and screenshot workflow. Phase 3
 added real goal/step rendering and accept/reject flows. Phase 4 added scoped
-Jo chats for goals and steps with SSE response delivery and persistence in Jo's
-existing memory database.
+Jo chats for goals and steps with Markdown rendering, provider-native SSE
+response delivery, and persistence in Jo's existing memory database.
 
 Run the local dashboard:
 

@@ -131,7 +131,8 @@ def test_scoped_chat_stream_persists_without_default_leak(tmp_path, monkeypatch)
     def fake_stream(messages, system, provider=None, max_tokens=2048, task="chat"):
         captured["messages"] = messages
         captured["system"] = system
-        yield "Scoped answer."
+        yield "**Scoped"
+        yield " answer**."
 
     monkeypatch.setattr(routes.brain, "stream", fake_stream)
 
@@ -151,7 +152,8 @@ def test_scoped_chat_stream_persists_without_default_leak(tmp_path, monkeypatch)
     stream_response = client.get(f"/chat/streams/{stream_id}")
 
     assert stream_response.status_code == 200
-    assert 'event: delta\ndata: {"text": "Scoped answer."}' in stream_response.text
+    assert 'event: delta\ndata: {"text": "**Scoped"}' in stream_response.text
+    assert 'event: delta\ndata: {"text": " answer**."}' in stream_response.text
     assert "event: done" in stream_response.text
     assert "ACTIVE DASHBOARD CONTEXT" in captured["system"]
     assert "Go to Yoga6 in Palo Alto at 12pm" in captured["system"]
@@ -162,7 +164,7 @@ def test_scoped_chat_stream_persists_without_default_leak(tmp_path, monkeypatch)
 
     assert [row["role"] for row in scoped_messages] == ["user", "assistant"]
     assert scoped_messages[0]["content"] == "How should I think about this?"
-    assert scoped_messages[1]["content"] == "Scoped answer."
+    assert scoped_messages[1]["content"] == "**Scoped answer**."
     assert mem.get_message_count() == 0
 
 
@@ -328,7 +330,7 @@ def test_playwright_scoped_chat_flow(tmp_path, monkeypatch):
     env = os.environ.copy()
     env["PURCIVAL_GOALS_DB"] = str(db_path)
     env["PURCIVAL_MEMORY_DATA_DIR"] = str(memory_dir)
-    env["PURCIVAL_DASHBOARD_FAKE_RESPONSE"] = "Scoped Playwright response."
+    env["PURCIVAL_DASHBOARD_FAKE_RESPONSE"] = "**Scoped** Playwright response."
     env["PYTHONPATH"] = str(ROOT)
     server = subprocess.Popen(
         [
@@ -376,6 +378,7 @@ def test_playwright_scoped_chat_flow(tmp_path, monkeypatch):
 
                 expect(page.locator(".message-stack")).to_contain_text("Can you scope this?")
                 expect(page.locator(".message-stack")).to_contain_text("Scoped Playwright response.")
+                expect(page.locator(".message-stack .chat-message--assistant strong")).to_contain_text("Scoped")
 
                 page.goto(url, wait_until="networkidle")
                 page.locator(f'[data-step-id="{step["id"]}"]').click(position={"x": 20, "y": 20})
@@ -385,6 +388,7 @@ def test_playwright_scoped_chat_flow(tmp_path, monkeypatch):
                 )
                 expect(page.locator(".message-stack")).to_contain_text("Can you scope this?")
                 expect(page.locator(".message-stack")).to_contain_text("Scoped Playwright response.")
+                expect(page.locator(".message-stack .chat-message--assistant strong")).to_contain_text("Scoped")
             finally:
                 browser.close()
     finally:

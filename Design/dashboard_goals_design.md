@@ -794,10 +794,11 @@ panel without a full-page reload, rejected steps do not ask for reasons, thumbs
 controls are not shown, step cards avoid title/subtitle treatment, and Phase 3
 screenshots plus a Playwright accept/reject flow cover the behavior. Phase 4 is
 complete: clicking a goal or step loads a scoped Jo chat panel, messages persist
-to Jo's existing memory database with the matching scope, responses are delivered
-over SSE through the `brain.stream()` fallback interface, and Playwright verifies
-streaming, reload persistence, and default-chat isolation. Phase 5 should begin
-in the next development cycle.
+to Jo's existing memory database with the matching scope, Markdown renders in
+chat bubbles, responses are delivered over SSE through provider-native
+`brain.stream()` handlers when available, and Playwright verifies streaming,
+reload persistence, Markdown rendering, and default-chat isolation. Phase 5
+should begin in the next development cycle.
 
 ---
 
@@ -1004,7 +1005,7 @@ The agent should propose fewer, better steps. Hard cap planning cycles at 1-3 su
 
 ### Risk: true streaming expands provider complexity
 
-SSE is straightforward. Provider streaming across Claude, ChatGPT, and Ollama is the harder part. The design keeps `brain.ask()` intact and adds a `brain.stream()` sibling with a full-response fallback.
+SSE is straightforward. Provider streaming across Claude, ChatGPT, and Ollama is the harder part. The design keeps `brain.ask()` intact and adds a `brain.stream()` sibling with provider-native streaming where available and a full-response fallback.
 
 ### Risk: dashboard dependency creep
 

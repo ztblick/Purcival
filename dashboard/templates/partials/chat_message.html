@@ -1,4 +1,7 @@
-<div class="chat-message chat-message--{{ message.role if message else 'assistant' }}">
+<div
+  class="chat-message chat-message--{{ message.role if message else 'assistant' }}"
+  data-markdown-content="{{ message.content if message else '' }}"
+>
   <span>{{ "Zach" if message and message.role == "user" else "Jo" }}</span>
-  <p>{{ message.content if message else "" }}</p>
+  <div class="markdown-body"></div>
 </div>

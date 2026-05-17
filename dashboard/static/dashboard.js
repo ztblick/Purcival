@@ -56,19 +56,131 @@ async function loadChatPanel(scopeType, scopeId) {
   }
 
   target.outerHTML = await response.text();
+  renderMarkdownMessages(document);
 }
 
-function createChatMessage(role, text) {
+function escapeHtml(value) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function renderInlineMarkdown(value) {
+  let html = escapeHtml(value);
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  return html;
+}
+
+function renderMarkdown(markdown) {
+  const lines = markdown.replaceAll("\r\n", "\n").split("\n");
+  const blocks = [];
+  let paragraph = [];
+  let listItems = [];
+  let inFence = false;
+  let codeLines = [];
+
+  function flushParagraph() {
+    if (!paragraph.length) {
+      return;
+    }
+    blocks.push(`<p>${renderInlineMarkdown(paragraph.join(" "))}</p>`);
+    paragraph = [];
+  }
+
+  function flushList() {
+    if (!listItems.length) {
+      return;
+    }
+    blocks.push(`<ul>${listItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ul>`);
+    listItems = [];
+  }
+
+  for (const line of lines) {
+    if (line.trim().startsWith("```")) {
+      if (inFence) {
+        blocks.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        codeLines = [];
+        inFence = false;
+      } else {
+        flushParagraph();
+        flushList();
+        inFence = true;
+      }
+      continue;
+    }
+
+    if (inFence) {
+      codeLines.push(line);
+      continue;
+    }
+
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = heading[1].length + 2;
+      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`);
+      continue;
+    }
+
+    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+    if (bullet) {
+      flushParagraph();
+      listItems.push(bullet[1].trim());
+      continue;
+    }
+
+    flushList();
+    paragraph.push(line.trim());
+  }
+
+  if (inFence) {
+    blocks.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+  }
+  flushParagraph();
+  flushList();
+
+  return blocks.join("");
+}
+
+function renderMarkdownInto(message, markdown) {
+  message.dataset.markdownContent = markdown;
+  const body = message.querySelector(".markdown-body");
+  if (body) {
+    body.innerHTML = renderMarkdown(markdown);
+  }
+}
+
+function renderMarkdownMessages(root) {
+  root.querySelectorAll(".chat-message[data-markdown-content]").forEach((message) => {
+    renderMarkdownInto(message, message.dataset.markdownContent || "");
+  });
+}
+
+function createChatMessage(role, text = "") {
   const wrapper = document.createElement("div");
   wrapper.className = `chat-message chat-message--${role}`;
+  wrapper.dataset.markdownContent = text;
 
   const label = document.createElement("span");
   label.textContent = role === "user" ? "Zach" : "Jo";
 
-  const body = document.createElement("p");
-  body.textContent = text;
+  const body = document.createElement("div");
+  body.className = "markdown-body";
 
   wrapper.append(label, body);
+  renderMarkdownInto(wrapper, text);
   return wrapper;
 }
 
@@ -93,7 +205,6 @@ async function submitChatForm(form) {
   const formData = new FormData(form);
   stack.appendChild(createChatMessage("user", message));
   const assistantMessage = createChatMessage("assistant", "");
-  const assistantBody = assistantMessage.querySelector("p");
   stack.appendChild(assistantMessage);
   stack.scrollTop = stack.scrollHeight;
 
@@ -116,10 +227,12 @@ async function submitChatForm(form) {
 
     const payload = await response.json();
     const stream = new EventSource(`/chat/streams/${payload.stream_id}`);
+    let assistantMarkdown = "";
 
     stream.addEventListener("delta", (event) => {
       const data = parseEventPayload(event);
-      assistantBody.textContent += data.text || "";
+      assistantMarkdown += data.text || "";
+      renderMarkdownInto(assistantMessage, assistantMarkdown);
       stack.scrollTop = stack.scrollHeight;
     });
 
@@ -137,7 +250,7 @@ async function submitChatForm(form) {
     stream.addEventListener("error", (event) => {
       const data = event.data ? parseEventPayload(event) : {};
       if (data.message) {
-        assistantBody.textContent = data.message;
+        renderMarkdownInto(assistantMessage, data.message);
       }
       stream.close();
       if (textarea) {
@@ -148,7 +261,7 @@ async function submitChatForm(form) {
       }
     });
   } catch (error) {
-    assistantBody.textContent = error.message;
+    renderMarkdownInto(assistantMessage, error.message);
     if (textarea) {
       textarea.disabled = false;
     }
@@ -216,4 +329,8 @@ document.addEventListener("keydown", (event) => {
     chatTarget.getAttribute("data-chat-scope-type"),
     chatTarget.getAttribute("data-chat-scope-id"),
   );
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+  renderMarkdownMessages(document);
 });

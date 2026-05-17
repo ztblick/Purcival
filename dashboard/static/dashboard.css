@@ -269,7 +269,13 @@ h3 {
 .goal-card p,
 .step-card p,
 .context-card p,
-.chat-message p {
+.chat-message p,
+.markdown-body p,
+.markdown-body ul,
+.markdown-body pre,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5 {
   margin: 0;
   color: var(--muted);
   line-height: 1.5;
@@ -441,6 +447,53 @@ h3 {
 
 .chat-message--user span {
   color: var(--orange);
+}
+
+.markdown-body {
+  display: grid;
+  gap: 10px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.markdown-body strong {
+  color: var(--text);
+  font-weight: 760;
+}
+
+.markdown-body em {
+  color: color-mix(in srgb, var(--purple) 75%, var(--text));
+  font-style: italic;
+}
+
+.markdown-body ul {
+  display: grid;
+  gap: 6px;
+  padding-left: 22px;
+}
+
+.markdown-body code {
+  border: 1px solid rgba(93, 247, 255, 0.22);
+  border-radius: 5px;
+  padding: 1px 5px;
+  color: var(--cyan);
+  background: rgba(93, 247, 255, 0.08);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.markdown-body pre {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px;
+  background: rgba(5, 4, 9, 0.72);
+}
+
+.markdown-body pre code {
+  border: 0;
+  padding: 0;
+  background: transparent;
 }
 
 .chat-message span,

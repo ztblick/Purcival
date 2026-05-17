@@ -11,7 +11,7 @@ agent sessions. Read it in full each session. Update sections marked
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
 **Phase:** 5 — Agent loop integration: suggestion generation (ready for next development cycle)
-**Status:** Phase 4 complete. Clicking a goal or step opens a scoped Jo chat panel, messages persist with `scope_type` / `scope_id`, responses are delivered over SSE using the `brain.stream()` fallback interface, and scoped summarization runs after responses. Route plus Playwright coverage verifies streaming, reload persistence, and no leakage into Jo's default chat. Full pytest passes.
+**Status:** Phase 4 complete. Clicking a goal or step opens a scoped Jo chat panel, messages persist with `scope_type` / `scope_id`, Markdown renders in chat bubbles, responses stream over SSE through provider-native `brain.stream()` handlers when available, and scoped summarization runs after responses. Route plus Playwright coverage verifies streaming, reload persistence, Markdown rendering, and no leakage into Jo's default chat. Full pytest passes.
 
 ---
 
@@ -150,7 +150,8 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
-- 2026-05-17 — Goals dashboard chat composer fix — fixed keyboard activation so Space/Enter inside the chat textarea no longer reloads the scoped panel, and added Playwright regression coverage for messages with spaces — pending.
+- 2026-05-17 — Goals dashboard Markdown and streaming — added dependency-free Markdown rendering for scoped chat messages, provider-native `brain.stream()` handlers for ChatGPT, Claude, and Ollama with fallback, per-chunk SSE delivery, and regression coverage — committed.
+- 2026-05-17 — Goals dashboard chat composer fix — fixed keyboard activation so Space/Enter inside the chat textarea no longer reloads the scoped panel, and added Playwright regression coverage for messages with spaces — committed.
 - 2026-05-17 — Goals dashboard Phase 4 — implemented scoped goal/step chat panel loading, message persistence, SSE response delivery via `brain.stream()`, scoped context assembly, and Playwright coverage for streaming, reload persistence, and default-chat isolation — committed.
 - 2026-05-17 — Goals dashboard Phase 3 UI correction — removed thumbs feedback, rejection reasons, step-section metadata, and title/subtitle step cards; accept/reject status is now the feedback signal — committed.
 - 2026-05-17 — Goals dashboard Phase 3 — implemented database-backed suggested/accepted step rendering, accept/reject and feedback endpoints, rejection reasons, thumbs feedback, refreshed Phase 3 screenshots, and full pytest passing — committed.

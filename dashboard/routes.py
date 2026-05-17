@@ -302,10 +302,16 @@ def stream_chat_response(stream_id: str):
                 task="chat",
             )
         )
-        response_text = "".join(response_source)
+        chunks = []
+        for chunk in response_source:
+            if not chunk:
+                continue
+            chunks.append(chunk)
+            yield format_sse("delta", {"text": chunk})
+
+        response_text = "".join(chunks)
         clean_response, _actions_json = strip_schedule_updates(response_text)
         assistant_id = memory.add_message("assistant", clean_response, scope=job.scope)
-        yield format_sse("delta", {"text": clean_response})
 
         try:
             check_and_summarize(memory, scope=job.scope)
