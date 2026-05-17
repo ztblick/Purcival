@@ -8,20 +8,21 @@ full at the start of every session, then read PROGRESS.md.
 
 ## Project context
 
-Purcival is a mature Python project. It runs on Ubuntu (Zach's desktop, NVIDIA
+Purcival is a mature Python project. It runs on Windows (Zach's desktop, NVIDIA
 RTX 3060) with development and CLI use on macOS as well. The codebase
 currently includes:
 
-- A multi-persona agent system (Jo is the primary; Ada and others available)
-- A **Stage 5 self-scheduling autonomous agent loop** with trigger-based wake-ups
+- A persona-based assistant system; Jo is the only persona currently in active use
+- A self-scheduling autonomous agent loop with trigger-based wake-ups
   and a tool-based action pipeline (built and stable)
 - A tool system with permission tiers (observe, message, draft, execute) and
-  built-in tools for schedule management, Telegram, Google Calendar, Gmail
+  built-in tools for schedule management, Google Calendar, Gmail, and Telegram
+  (Telegram exists in code but is not currently operable)
 - A memory system (per-persona SQLite, narrative state, structured state,
   summarization via Claude, semantic retrieval via Ollama embeddings)
 - LLM integrations: **Claude, ChatGPT (OpenAI), and Ollama**, with per-call-site
   model selection across chat / summary / reasoning tasks
-- Multiple Telegram bot interfaces, one per persona
+- Telegram bot interfaces exist historically but are not the active interface
 - A test suite (~150 tests across the project)
 
 **Active development:** the Goals dashboard — a local web app for goal/step
@@ -31,7 +32,7 @@ PROGRESS.md → Current focus.
 Reference design docs:
 
 - `Design/PURCIVAL_DESIGN_DOC.md` — overall system design (living)
-- `Design/STAGE5_AGENT_DESIGN.md` — agent loop architecture
+- `Design/agent_loop_design.md` — agent loop architecture
 - `Design/openai_integration_design.md` — completed OpenAI work
 - `Design/dashboard_goals_design.md` — Goals dashboard (Phase 0 deliverable, in progress)
 - `README.md` — project overview and setup
@@ -143,7 +144,7 @@ update AGENTS.md.)
 - Tests: `pytest`
 - Specific tests: `pytest path/to/test_file.py::test_name`
 - Terminal CLI: `python main.py [--persona jo] [--provider chatgpt|claude|ollama]`
-- Telegram service: `python run_telegram.py --persona jo`
+- Telegram service: currently inactive; do not rely on it without explicit setup work
 
 ---
 
@@ -153,7 +154,7 @@ update AGENTS.md.)
   do as a side effect.
 - **Refactoring stable subsystems "for cleanliness."** If it works and tests
   cover it, leave it alone. Refactor with intent, not reflex.
-- **Changing the Telegram or systemd integration** without a specific reason
+- **Changing the Telegram or background-service integration** without a specific reason
   and approved design.
 - **The trigger-deletion bug** (known issue, on the backlog — don't tackle
   without explicit instruction; needs careful investigation, not a quick fix).

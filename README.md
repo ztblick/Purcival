@@ -1,610 +1,284 @@
 # Purcival
 
-A personal AI assistant built from scratch, with help from Claude, named after our cat.
+Purcival is Zach's self-hosted personal AI assistant, built as both a useful
+local tool and a systems-learning project. It runs on Zach's Windows PC with an
+RTX 3060, uses Jo as the active persona, persists long-term memory in SQLite,
+and can route LLM calls to Claude, ChatGPT, or a local Ollama model.
 
-Purcival runs on your own hardware, talks to you via Telegram on your phone,
-and lets you choose between three LLM providers: Anthropic's Claude, OpenAI's
-ChatGPT, or a local model running on your GPU. Each persona is a separate
-Telegram bot with its own personality, its own persistent memory, and its own
-conversation history. Conversations survive restarts, reboots, and crashes.
-Older conversations are automatically summarized and retrieved by semantic
-similarity when they become relevant again.
+The active development project is the **Goals dashboard**: a local web app for
+tracking Zach's goals, suggesting concrete next steps, and opening focused Jo
+chat threads about a goal or step.
 
-The primary persona (Jo) is a **self-scheduling autonomous agent** that
-plans its own day, manages its own wake-up schedule, reads your Google
-Calendar and Gmail inbox, and sends proactive messages via Telegram. The
-agent reasons about what to do using its configured reasoning provider,
-schedules targeted wake-ups with specific purposes, and adjusts its plan
-when your situation changes.
+## Current Status
 
-## How it works
+Built and stable:
 
+- Jo persona with persistent memory in `data/jo/memory.db`.
+- Terminal chat through `main.py`.
+- Self-scheduling agent loop with trigger-based wake-ups.
+- Tool interface with permission tiers: observe, message, draft, execute.
+- Schedule, Google Calendar, Gmail, and Telegram tool implementations.
+- Per-task LLM model routing for chat, summary, and reasoning calls.
+- Conversation summarization and semantic retrieval through Ollama embeddings.
+
+Important current constraints:
+
+- Jo is the only persona currently in active use.
+- Telegram exists in code but is not currently operable.
+- Windows is the primary environment.
+- Background service setup on Windows is still TBD.
+- Design docs live in `Design/`.
+
+## Architecture
+
+```text
+Windows PC
+  |
+  | Terminal / future dashboard
+  v
+main.py or dashboard app
+  |
+  | loads persona + context
+  v
+context.py
+  |-- personas/jo.md
+  |-- data/user_context.md
+  |-- data/jo/memory.db
+  |-- cached tool context
+  |
+  v
+brain.ask(task=...)
+  |-- Claude
+  |-- ChatGPT
+  |-- Ollama
+
+agent.py
+  |
+  | perceive -> reason -> validate -> act -> update narrative
+  v
+tools/
+  |-- schedule_tool.py
+  |-- google_calendar.py
+  |-- gmail.py
+  |-- telegram_tool.py (inactive in current setup)
 ```
-Your phone (Telegram)                         Your Linux box
-    │                                              │
-    ├─ message Jo bot  ──→  Telegram servers  ──→  ├─ run_telegram.py --persona jo
-    │                                              │
-    │            Each process:                     │
-    │            ┌───────────────────────────┐     │
-    │            │ Long poll Telegram        │     │
-    │            │ Persist user message      │──→ data/<persona>/memory.db
-    │            │ Assemble context:         │     │
-    │            │   ├─ Persona prompt       │←── personas/<persona>.md
-    │            │   ├─ User context         │←── data/user_context.md
-    │            │   ├─ Session info         │    (current time, device type)
-    │            │   ├─ Scheduled plan       │←── memory.db (agent wake-ups)
-    │            │   ├─ Relevant summaries   │←── memory.db (semantic search)
-    │            │   └─ Recent messages      │←── memory.db (verbatim history)
-    │            │ Call brain.ask(task=…)  ──┼──→ Ollama   (local GPU)
-    │            │                          ──┼──→ Claude   (Anthropic API)
-    │            │                          ──┼──→ ChatGPT  (OpenAI API)
-    │            │ Strip <schedule_updates>  │     │
-    │            │ Persist response          │──→ memory.db
-    │            │ Apply schedule updates    │     │
-    │            │ Check if summarization    │     │
-    │            │   needed → if so:         │     │
-    │            │   Summarize old messages  │──→ summary-task provider
-    │            │   Embed summary           │──→ nomic-embed-text (Ollama)
-    │            │   Store summary + vector  │──→ memory.db
-    │            │                           │     │
-    │            │ Agent scheduler:          │     │
-    │            │   Check triggers every 60s│     │
-    │            │   If due → run agent cycle│     │
-    │            │     ├─ Perceive (tools)   │     │
-    │            │     │  ├─ Google Calendar ─┼──→ Google Calendar API
-    │            │     │  └─ Gmail ───────────┼──→ Gmail API
-    │            │     ├─ Reason (LLM) ──────┼──→ reasoning-task provider
-    │            │     ├─ Parse JSON actions  │     │
-    │            │     ├─ Validate + act     │     │
-    │            │     └─ Update narrative   │──→ memory.db
-    │            └──────────────────────────┘
-```
 
-Each persona runs as its own process with its own Telegram bot and its own
-SQLite database. Your Linux box long-polls Telegram's servers — no open ports
-or public IP needed. The model doesn't remember anything between API calls;
-Purcival manages all conversation context, persistence, and retrieval.
+The model is stateless. Purcival owns persistence, prompt assembly, tool
+state, summaries, and retrieval.
 
-## Quick start
+## Quick Start
 
-```bash
-git clone <your-repo-url> purcival
-cd purcival
+PowerShell:
 
-python3 -m venv venv
-source venv/bin/activate
+```powershell
+git clone <repo-url> Purcival
+cd Purcival
+
+python -m venv venv
+.\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-# Pull the local models
-ollama pull phi4                # main local conversation model
-ollama pull nomic-embed-text    # embedding model for memory retrieval
-
-cp .env.example .env
-# Edit .env with your settings
+copy .env.example .env
 ```
 
-## Two interfaces
+Install local models if using Ollama:
 
-### Terminal (for local development and testing)
-
-```bash
-python main.py                          # pick persona interactively
-python main.py --persona jo             # jump straight in
-python main.py --provider claude        # use Claude instead of the default
-python main.py --provider chatgpt       # use ChatGPT
-python main.py --debug                  # dump full prompts to debug/
-python main.py -m "hello" --persona ada # single message
+```powershell
+ollama pull nomic-embed-text
 ```
 
-Terminal commands: `/persona`, `/claude`, `/chatgpt`, `/ollama`, `/schedule`,
-`/status`, `/debug`, `clear`, `quit`
+The local chat model changes over time. Set the active Ollama chat, summary,
+and reasoning models in `.env`.
 
-The terminal interface shows a spinner when summarization is running
-("Committing conversation to memory...") and allows longer, more detailed
-responses from the LLM. The `clear` command requires typed confirmation
-before deleting data. Schedule updates in LLM responses are stripped and
-applied automatically — status messages show what was applied or rejected.
+## Running Jo
 
-### Telegram (for daily use from your phone)
+Terminal chat:
 
-```bash
-# Test manually first
-python run_telegram.py --persona jo
-
-# Run as a background service (starts on boot, auto-restarts)
-sudo systemctl start purcival@jo
-sudo systemctl enable purcival@jo
-
-# Run multiple personas simultaneously
-sudo systemctl start purcival@ada
-sudo systemctl enable purcival@ada
-```
-
-Telegram commands: `/start`, `/provider`, `/status`
-
-The Telegram interface instructs the LLM to keep responses concise and
-scannable for mobile reading. The `/clear` command is disabled on Telegram
-to prevent accidental data loss — use the terminal interface to clear history.
-
-### Setting up Telegram
-
-1. Message @BotFather on Telegram, create a bot for each persona
-2. Message @userinfobot to get your user ID
-3. Add tokens and user ID to `.env`:
-   ```
-   TELEGRAM_ALLOWED_USER_ID=123456789
-   TELEGRAM_TOKEN_JO=7123456:AAF...
-   TELEGRAM_TOKEN_ADA=7234567:BBG...
-   ```
-4. Test: `python run_telegram.py --persona jo`
-
-### Setting up systemd
-
-1. Edit `purcival@.service` — replace `YOUR_USERNAME` with your Linux username
-2. `sudo cp purcival@.service /etc/systemd/system/`
-3. `sudo systemctl daemon-reload`
-4. `sudo systemctl start purcival@jo`
-5. `sudo systemctl enable purcival@jo`
-
-Useful commands:
-```bash
-journalctl -u purcival@jo -f        # live logs
-sudo systemctl restart purcival@jo  # restart after code changes
-sudo systemctl status 'purcival@*'  # status of all personas
-```
-
-Note: changes to Python files require a service restart to take effect.
-Changes to `user_context.md` and persona `.md` files are read from disk
-on every message and take effect immediately.
-
-## Personas
-
-Each persona is a markdown file in `personas/` that defines a system prompt.
-The filename becomes the persona's name. Each persona gets its own Telegram
-bot, its own process, and its own memory database.
-
-```
-personas/
-├── jo.md          — Detail-oriented life manager (agent-enabled)
-└── ada.md         — Spunky technical sparring partner
-```
-
-**Jo** is a detail-oriented personal assistant. They are witty, warm, and to
-the point. They remember the details of your life — deadlines, commitments,
-people's names — and keeps you on track with your goals. They give gentle
-reminders when things are slipping and is honest when you need to hear it.
-They are the primary persona with autonomous agent capabilities — Jo plans the
-day, reads your Google Calendar, schedules wake-ups, and sends proactive
-messages via Telegram.
-
-**Ada** is a technical expert and thinking partner. Sharp, curious, and a
-little irreverent. She is who you talk to about coding, systems design,
-math, science, and engineering. She explains things clearly without dumbing
-them down, pushes back on weak ideas, and gets excited when a conversation
-goes somewhere interesting. She does not care about schedules or to-do lists.
-
-To add a new persona: create a `.md` file in `personas/`, create a Telegram
-bot with @BotFather, add the token to `.env`, and start the service. The
-persona gets a fresh, independent memory database automatically.
-
-## Self-scheduling agent
-
-Purcival is an autonomous agent that plans its own day. Instead of firing on
-a fixed interval, the agent schedules purposeful wake-ups with specific
-contexts:
-
-- "Wake me at 9:52 to encourage Zach before his 10:00 meeting"
-- "Wake me at 22:30 to remind Zach to start winding down"
-- "Wake me tomorrow at 6:00 for morning planning"
-
-### How it works
-
-1. **Bootstrap:** At the configured wake time, the system seeds a planning
-   cycle. The agent wakes up, reads your calendar, and plans its day.
-2. **Planning cycles:** The agent schedules periodic check-ins for itself
-   to scan for new information. Empty tools list = load all tools.
-3. **Targeted wake-ups:** The agent schedules specific wake-ups with a
-   purpose and the tools it needs. Each cycle reasons about its purpose.
-4. **User messages update plans:** When you tell the agent something
-   time-sensitive ("remind me to give Tessa Tylenol at 9pm"), it silently
-   schedules a reminder. No separate planning cycle needed.
-
-### Unified JSON action format
-
-All tool calls — including schedule management — use a single JSON format.
-The agent outputs three sections per cycle:
-
-- `<reasoning>` — freeform text (the agent's thinking process)
-- `<actions>` — a JSON array of tool calls (parsed and validated by code)
-- `<narrative_state>` — freeform text (the agent's updated understanding)
-
-The principle: schema-constrain the interface between LLM and code (actions
-are JSON), leave freeform the interface between LLM and LLM (reasoning and
-narrative stay as prose). This eliminates ambiguity in the action format and
-makes validation trivial — `json.loads()` either works or it doesn't.
-
-Schedule operations (add/modify/cancel wake-ups) are just tool calls to the
-ScheduleTool, validated and executed through the same pipeline as Telegram
-messages and calendar reads. There is no special-case handling for schedule
-operations.
-
-### Configuring the agent
-
-Use `/schedule` in the terminal to set:
-- **Wake time:** When the agent's first planning cycle fires (e.g., 06:00)
-- **Sleep time:** No agent-initiated wake-ups after this (e.g., 23:00)
-- **Daily action limit:** Max messages/drafts/executions per day (default: 25)
-
-```bash
+```powershell
 python main.py --persona jo
-# Then type /schedule and follow the prompts
-```
-
-The running Telegram service picks up schedule changes without restarting.
-Changing operating hours removes old planning cycles and seeds new ones.
-Targeted wake-ups (reminders, meeting prep) are always preserved.
-
-### Guardrails
-
-Two layers of validation, all enforced by code, not just the LLM prompt:
-
-**Generic gate (agent loop):** applied to every tool call uniformly:
-- Tool must exist and be enabled
-- Method must exist on the tool
-- Tier must be permitted (execute-tier requires explicit approval)
-- Daily action budget must not be exhausted
-
-**Tool-specific validation (inside each tool):** each tool validates its
-own parameters and business rules:
-- ScheduleTool checks operating hours, future time, trigger existence
-- TelegramTool checks for empty messages
-- GoogleCalendarTool handles API errors with consecutive failure tracking
-- GmailTool handles API errors with consecutive failure tracking
-
-Additional guardrails:
-- Wake-ups outside operating hours are rejected by ScheduleTool
-- `/schedule` never deletes targeted wake-ups
-- Every action is logged in the agent_actions audit trail
-
-### Tools
-
-The agent interacts with the world through tools:
-
-| Tool | What it does | Status |
-|------|-------------|--------|
-| **ScheduleTool** | Agent manages its own wake-up schedule | Built |
-| **TelegramTool** | Send messages to the user | Built |
-| **GoogleCalendarTool** | Read events from all visible calendars | Built |
-| **GmailTool** | Read inbox, surface important emails | Built (read-only) |
-
-Adding a new tool: create a class implementing the `Tool` interface in
-`tools/`, register it in `tools/__init__.py`. No changes to the agent
-loop needed.
-
-## Google Calendar integration
-
-The agent reads all calendars visible in your Google Calendar sidebar —
-personal, school, shared calendars, birthdays, etc. It detects new events,
-changed events, cancelled events, and imminent events (starting within 15
-minutes). Each event is tagged with which calendar it came from.
-
-### Error resilience
-
-If the Google Calendar API starts failing, the agent tracks consecutive
-failures. After 3 failures, it tells you via Telegram. After 10, it asks
-you to re-authorize. Success resets the counter. The agent never silently
-goes blind.
-
-## Gmail integration
-
-The agent reads your inbox and surfaces emails that deserve your attention.
-It is not a second inbox — you check your own email. Jo's job is to catch
-the things you'd miss, forget about, or want to engage with sooner, and
-to contextualize them against what she knows about your life.
-
-### Three-layer filtering
-
-Email goes through three increasingly selective filters:
-
-**Layer 1: Gmail API query.** `category:primary is:unread newer_than:1d`
-runs on Google's servers. This eliminates newsletters, promotions, social
-notifications, and automated messages before anything is downloaded. About
-90% of email volume never leaves Google.
-
-**Layer 2: Python header filters.** Applied locally, zero LLM cost. Catches
-automated messages that Gmail miscategorized as Primary: mailing list
-headers (`List-Unsubscribe`, `List-Id`), bulk precedence, auto-submitted
-messages, and no-reply senders. Also filters out emails where you aren't
-in the To or CC fields (BCC'd mass sends). A recruiter's cold outreach
-passes. A Costco coupon does not.
-
-**Layer 3: Jo's judgment.** Emails that survive both filters appear as
-snippets in Jo's context (sender, subject, ~200 chars). Jo decides whether
-to message you — and when she does, she contextualizes rather than
-forwards. "John just emailed about reviewing your resume — this is the
-opportunity you were excited about last week" rather than "New email from
-John Smith, subject: Resume review."
-
-Jo loads behavioral guidelines (the "email skill file") only when there
-are emails to show. On cycles with no new email, the guidelines never
-enter the prompt — zero token cost.
-
-### Error resilience
-
-Gmail uses the same consecutive-failure tracking as the calendar tool.
-After 3 failures Jo tells you; after 10 she asks you to re-authorize.
-
-## Google API setup
-
-Both Calendar and Gmail use a shared OAuth2 credential. One auth flow
-grants access to both.
-
-### Setup
-
-1. Create a Google Cloud project
-2. Enable both the **Calendar API** and the **Gmail API**
-3. Create OAuth credentials and download the client secret JSON
-4. **Publish the OAuth consent screen** (APIs & Services → OAuth consent
-   screen → Publish). This prevents refresh tokens from expiring after
-   7 days. You don't need Google to review it for personal use.
-5. Run the auth flow once from the terminal:
-   ```bash
-   python -c "from google_auth import run_auth_flow; run_auth_flow('jo')"
-   ```
-6. See `GOOGLE_CALENDAR_SETUP.md` for detailed step-by-step instructions
-
-The agent automatically loads both tools when credentials exist. No
-additional configuration needed — just run the auth flow and restart
-the service.
-
-## Memory system
-
-Purcival uses a three-tier persistent memory system. Every conversation is
-stored, older conversations are automatically compressed into summaries,
-and relevant summaries are retrieved via semantic search to give each
-persona long-term memory.
-
-### Data layout
-
-```
-data/
-├── user_context.md          ← shared context about you (manually maintained)
-├── jo/
-│   ├── memory.db            ← messages, summaries, triggers, agent state
-│   └── google_credentials.json  ← Google OAuth tokens (gitignored)
-├── ada/
-│   └── memory.db
-└── ...
-```
-
-Each persona's memory is completely isolated — Jo doesn't know what
-you discussed with Ada, and vice versa. This is a deliberate design choice
-that mirrors how human relationships work.
-
-The shared `user_context.md` file is the one piece of cross-persona context:
-your background, values, family, goals. You update it manually when things
-change. Every persona reads it on every message.
-
-### Three tiers of memory
-
-**Tier 1: Shared context** (`user_context.md`) — who you are. Manually
-maintained. Read by all personas. Contains background information that
-doesn't change often: family, career, values, interests.
-
-**Tier 2: Conversation summaries** (SQLite `summaries` table) — automatically
-generated condensations of older conversations using the configured
-summary-task provider. Each summary is stored with a vector embedding for
-semantic search. When a new message arrives, the system embeds the message,
-finds the most similar stored summaries, and includes them in the prompt.
-
-**Tier 3: Verbatim messages** (SQLite `messages` table) — the full record
-of every message exchanged, timestamped in local time. Recent messages are
-included directly in the API call's messages array. Older messages stay in
-the database and are accessible only through their summaries.
-
-### Agent state
-
-In addition to conversation memory, the agent-enabled persona stores:
-
-- **Narrative state** (`agent_narrative` table) — prose written by the LLM
-  at the end of each cycle summarizing its current understanding. Read at
-  the start of the next cycle for continuity. Append-only log with 30-day
-  retention.
-- **Structured state** (`tool_state` table) — key-value store for each
-  tool's internal state (sync timestamps, seen IDs, event action history,
-  calendar list cache, error tracking).
-- **Action log** (`agent_actions` table) — audit trail of every action
-  taken or proposed, with 30-day retention.
-- **Reasoning log** (`reasoning_log` table) — full reasoning traces for
-  debugging, with 7-day retention.
-
-## Debug mode
-
-The terminal interface supports prompt dumping for inspecting exactly what
-the LLM receives on each message.
-
-```bash
-# Start with debug on
+python main.py --persona jo --provider chatgpt
+python main.py --persona jo --provider claude
+python main.py --persona jo --provider ollama
 python main.py --persona jo --debug
-
-# Or toggle mid-session
-/debug
 ```
 
-Debug dumps are saved to `debug/` as timestamped text files containing
-the full system prompt (with all sections and retrieved summaries),
-every message in the array with individual token counts, and a total
-token breakdown.
+Single message:
 
-## Project structure
-
-```
-purcival/
-├── main.py              Terminal UI — persona picker, chat loop, /schedule
-├── run_telegram.py      Telegram entry point — one persona per process
-├── telegram_bot.py      PersonaBot class — messaging, agent scheduler
-├── brain.py             LLM interface — routes to Claude, ChatGPT, or Ollama
-├── context.py           Context assembly — builds full prompts from all sources
-├── memory.py            Persistent storage — messages, summaries, triggers, agent state
-├── embeddings.py        Vector embeddings — generates embeddings via Ollama
-├── summarizer.py        Summarization engine — compresses old conversations
-├── proactive.py         Agent bootstrap and scheduler
-├── agent.py             Agent cycle — perceive, reason, validate, act (JSON actions)
-├── google_auth.py       Google OAuth2 flow + credential management
-├── tokens.py            Token counting — abstract interface for budget enforcement
-├── config.py            Loads settings from .env (per-task models per provider)
-├── personas.py          Discovers and loads persona files
-├── tools/
-│   ├── __init__.py      Tool registry and factory
-│   ├── base.py          Tool and ToolMethod base classes
-│   ├── schedule_tool.py ScheduleTool — self-scheduling with internal validation
-│   ├── telegram_tool.py TelegramTool — Telegram send wrapper
-│   ├── google_calendar.py GoogleCalendarTool — multi-calendar reader
-│   └── gmail.py         GmailTool — three-layer filtered inbox reader
-├── personas/            Personality definitions (markdown)
-├── data/                Per-persona databases + shared user context (gitignored)
-├── debug/               Prompt dumps from debug mode (gitignored)
-├── docs/                Design docs (openai integration, dashboard goals, etc.)
-├── tests/               Test suite (~150 tests)
-├── google_client_secret.json  Google OAuth client secret (gitignored)
-├── purcival@.service    Systemd template for background services
-├── requirements.txt     Python dependencies
-├── .env.example         Configuration template
-└── .gitignore           Keeps secrets, data, debug dumps, and artifacts out of git
+```powershell
+python main.py --persona jo -m "hello"
 ```
 
-## Multi-provider architecture
+Terminal commands:
 
-Purcival currently supports three LLM providers, with **per-call-site model
-selection** so the right model is used for each task without paying for
-overkill where it's not needed.
-
-**Claude** (via Anthropic API) — Anthropic's frontier family. Strong
-reasoning, careful style, good tool use. Switch to it with `/claude` in the
-terminal. Available models include the Sonnet, Opus, and Haiku families.
-
-**ChatGPT** (via OpenAI API) — OpenAI's GPT-5 family. Switch to it with
-`/chatgpt`. Note: GPT-5 models use `max_completion_tokens` rather than
-`max_tokens`; Purcival's `brain.ask()` translates internally.
-
-**Ollama** (local inference) — free, private, runs on your GPU. Defaults to
-Phi-4 on an RTX 3060 (12GB VRAM). A separate embedding model
-(`nomic-embed-text`, ~270MB) runs on CPU for memory retrieval without
-competing for GPU VRAM.
-
-### Per-task model selection
-
-Each provider has three configurable models, one per call site:
-
-- **chat** — interactive conversation, optimized for responsiveness
-- **summary** — conversation compaction, optimized for cheap good-enough quality
-- **reasoning** — the Stage 5 agent loop, where multi-step decisions are made
-
-A single `DEFAULT_PROVIDER` selects the active provider family for all three
-call sites. Per-task models within a family are configured via env vars (see
-Configuration below). Call sites pass `task="chat" | "summary" | "reasoning"`
-to `brain.ask()`, which looks up the right model.
-
-If the configured provider is unconfigured (e.g., missing API key), `brain.ask()`
-falls back to Ollama with a logged warning rather than failing hard.
+- `/persona`
+- `/claude`
+- `/chatgpt`
+- `/ollama`
+- `/schedule`
+- `/status`
+- `/debug`
+- `clear`
+- `quit`
 
 ## Configuration
 
-All settings live in `.env` (never committed to git):
+All local configuration lives in `.env`, which is never committed.
 
-```bash
-# --- Provider (single lever) ---
+Core provider settings:
+
+```env
 DEFAULT_PROVIDER=ollama
-DEFAULT_PERSONA=default
 
-# --- Claude (Anthropic) ---
-ANTHROPIC_API_KEY=your-anthropic-key
-CLAUDE_CHAT_MODEL=claude-sonnet-4-6
-CLAUDE_SUMMARY_MODEL=claude-haiku-4-5-20251001
-CLAUDE_REASONING_MODEL=claude-opus-4-7
+ANTHROPIC_API_KEY=
+OPENAI_API_KEY=
 
-# --- ChatGPT (OpenAI) ---
-OPENAI_API_KEY=your-openai-key
-CHATGPT_CHAT_MODEL=gpt-5.4-mini
-CHATGPT_SUMMARY_MODEL=gpt-5.4-nano
-CHATGPT_REASONING_MODEL=gpt-5.5
-
-# --- Ollama (local) ---
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_CHAT_MODEL=phi4
 OLLAMA_SUMMARY_MODEL=phi4
 OLLAMA_REASONING_MODEL=phi4
-
-# --- Telegram ---
-TELEGRAM_ALLOWED_USER_ID=
-TELEGRAM_CHAT_ID=
-TELEGRAM_TOKEN_ADA=
-TELEGRAM_TOKEN_JO=
 ```
 
-Only the provider you actually use needs its API key set. Missing keys for
-unused providers don't cause errors.
+Per-task cloud model settings are available for Claude and ChatGPT:
+
+```env
+CLAUDE_CHAT_MODEL=
+CLAUDE_SUMMARY_MODEL=
+CLAUDE_REASONING_MODEL=
+
+CHATGPT_CHAT_MODEL=
+CHATGPT_SUMMARY_MODEL=
+CHATGPT_REASONING_MODEL=
+```
+
+## Memory
+
+Current data layout:
+
+```text
+data/
+  user_context.md
+  jo/
+    memory.db
+    google_credentials.json
+```
+
+Memory tiers:
+
+- `data/user_context.md`: manually maintained shared user context.
+- `messages`: verbatim conversation history.
+- `summaries`: compressed older conversation chunks with embeddings.
+- `tool_state`: durable state for tools.
+- `agent_narrative`: prose continuity state for the agent.
+- `agent_actions`: action audit trail.
+- `reasoning_log`: debugging trace for agent cycles.
+
+## Agent Loop
+
+The agent loop is implemented in `agent.py` and scheduled through
+`proactive.py`.
+
+Each cycle:
+
+1. Loads trigger purpose, narrative state, active plan, and pending proposals.
+2. Runs relevant tools for perception.
+3. Builds a reasoning prompt.
+4. Calls `brain.ask(..., task="reasoning")`.
+5. Parses JSON tool actions.
+6. Validates actions through generic and tool-specific gates.
+7. Executes allowed actions.
+8. Updates narrative and reasoning logs.
+9. Ensures a future planning cycle exists.
+
+Actions use JSON inside `<actions>` tags. Narrative continuity remains prose.
+
+## Tools
+
+| Tool | Purpose | Current note |
+| --- | --- | --- |
+| `ScheduleTool` | Manage agent wake-ups | Active |
+| `GoogleCalendarTool` | Read upcoming calendar events | Active when Google credentials exist |
+| `GmailTool` | Read and filter inbox context | Active when Google credentials exist |
+| `TelegramTool` | Send Telegram messages | Implemented but inactive in current setup |
+
+Adding a tool means implementing the `Tool` interface in `tools/base.py` and
+registering it in `tools/__init__.py`.
+
+## Google API Setup
+
+Calendar and Gmail use shared OAuth credentials.
+
+```powershell
+python -c "from google_auth import run_auth_flow; run_auth_flow('jo')"
+```
+
+Credentials are stored under `data/jo/google_credentials.json` and are ignored
+by git.
+
+## Goals Dashboard
+
+Current phase: design review.
+
+Canonical design doc:
+
+```text
+Design/dashboard_goals_design.md
+```
+
+Planned implementation phases:
+
+- Phase 1: shared data layer and scoped memory.
+- Phase 2: dashboard skeleton and visual identity.
+- Phase 3: real goal/step rendering and accept/reject flows.
+- Phase 4: scoped chat on goals and steps.
+- Phase 5: agent-generated suggestions.
+- Phase 6: accountability.
+- Phase 7: feedback-loop polish.
+
+Do not start production dashboard code until the design doc is approved.
+
+## Project Structure
+
+```text
+Purcival/
+  main.py
+  agent.py
+  brain.py
+  config.py
+  context.py
+  embeddings.py
+  google_auth.py
+  memory.py
+  proactive.py
+  summarizer.py
+  telegram_bot.py
+  tools/
+  personas/
+  Design/
+  tests/
+  requirements.txt
+  AGENTS.md
+  PROGRESS.md
+```
+
+## Tests
+
+The intended test runner is:
+
+```powershell
+pytest
+```
+
+The current Windows environment may need test tooling installed or cleaned up
+before the full suite is reliable. Some older direct-run test files still carry
+legacy assumptions; normalize the test baseline before treating "full suite
+green" as meaningful.
 
 ## Roadmap
 
-- [x] Claude API integration
-- [x] Local inference via Ollama
-- [x] OpenAI / ChatGPT integration — three providers with fallback to Ollama
-- [x] Per-task model selection (chat / summary / reasoning, configurable per provider)
-- [x] Dual-provider routing with mid-conversation switching
-- [x] Rich terminal UI with markdown rendering
-- [x] Persona system — multiple personalities from markdown files
-- [x] Telegram bots — one per persona, chat from your phone
-- [x] Systemd services — auto-start on boot, auto-restart on crash
-- [x] SQLite persistence — messages survive restarts
-- [x] Shared user context (`user_context.md`)
-- [x] Context assembly — full prompts from persona + context + history
-- [x] Embedding infrastructure — vector similarity via nomic-embed-text
-- [x] Conversation summarization — via configurable summary provider
-- [x] Semantic retrieval — surface relevant past conversations
-- [x] Timestamps — local time on all messages and summaries
-- [x] Device-aware responses — concise on Telegram, detailed in terminal
-- [x] Proactive messaging — scheduled wake-ups with decision gate
-- [x] Debug mode — dump full prompts for inspection
-- [x] Cost optimization — balanced token budgets (~20K typical)
-- [x] Safe clear — disabled on Telegram, confirmation required on CLI
-- [x] Self-scheduling agent — plans own day, manages own wake-ups
-- [x] Tool interface — extensible base class for agent capabilities
-- [x] ScheduleTool — agent manages its own trigger schedule
-- [x] TelegramTool — uniform interface for proactive messaging
-- [x] Unified JSON action format — all tool calls (including schedule) in one JSON array
-- [x] Two-layer validation — generic gate in agent loop + tool-specific validation
-- [x] Narrative state — LLM maintains prose understanding across cycles
-- [x] Reasoning log — full traces for debugging (7-day retention)
-- [x] User message plan updates — `<schedule_updates>` with JSON format
-- [x] Chat ID persistence — survives service restarts
-- [x] `/schedule` preserves targeted wake-ups
-- [x] Time awareness — agent knows current time and trigger fire time
-- [x] Google Calendar integration (read-only, multi-calendar)
-- [x] Calendar event diffing — new, changed, cancelled, imminent detection
-- [x] Calendar error resilience — consecutive failure tracking with user notification
-- [x] All-day event support — shown separately, no imminent logic
-- [x] Calendar list caching with 24-hour TTL
-- [x] Gmail integration (read-only, three-layer filtering)
-- [x] Email behavioral guidelines loaded by tool (skill-file pattern)
-- [x] Email header filters — List-Unsubscribe, no-reply, precedence, direct addressing
-- [x] Email error resilience — consecutive failure tracking
-- [ ] **Goals dashboard — local web app for goal/step tracking with proactive suggestions (in design)**
-- [ ] OpenAI o-series reasoning model support (o3, o4-mini)
-- [ ] Mixing providers across call sites (e.g., Claude reasoning + ChatGPT chat)
-- [ ] Web search tool — proactive external info gathering
-- [ ] Gmail write access — draft replies, send email (requires gmail.compose scope)
-- [ ] Execute-tier approval flow via Telegram
-- [ ] Large local model for async agent reasoning
-
-## Requirements
-
-- Python 3.11+
-- Linux with systemd (for background services)
-- For local inference: Ollama + a GPU (tested on RTX 3060 12GB)
-- For embeddings: `ollama pull nomic-embed-text`
-- For Claude: an Anthropic API key with credits
-- For ChatGPT: an OpenAI API key with credits
-- For Google Calendar and Gmail: Google Cloud project with Calendar API
-  and Gmail API enabled (see GOOGLE_CALENDAR_SETUP.md)
-- Telegram account and bot tokens from @BotFather
+- Goals dashboard Phase 1 data layer.
+- Dashboard skeleton and local UI.
+- Scoped Jo chats for goals and steps.
+- Agent-generated suggestions tied to active goals.
+- Accountability context for accepted steps.
+- Feedback summaries to improve future suggestions.
+- Future reactivation or replacement of Telegram/mobile messaging.

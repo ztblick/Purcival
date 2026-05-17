@@ -3,7 +3,7 @@
 **Status:** Draft for Zach review
 **Date:** 2026-05-17
 **Phase:** 0 - Design only
-**Scope:** shared goal state, scoped conversations, dashboard UI, and Stage 5 agent integration
+**Scope:** shared goal state, scoped conversations, dashboard UI, and agent integration
 
 ---
 
@@ -11,12 +11,12 @@
 
 The Goals dashboard gives Purcival a local web interface for tracking Zach's goals, proposing concrete next steps, and opening focused conversations about a goal or step.
 
-The dashboard should not become a parallel assistant stack. It should be a new interface over the existing Purcival brain, persona, memory, summarization, retrieval, and Stage 5 tool loop.
+The dashboard should not become a parallel assistant stack. It should be a new interface over the existing Purcival brain, persona, memory, summarization, retrieval, and tool loop.
 
 The v1 frame is:
 
 - Zach creates goals.
-- Purcival, primarily Jo, proposes one-shot steps toward those goals during planning cycles.
+- Jo proposes one-shot steps toward those goals during planning cycles.
 - Zach accepts, rejects, rates, completes, or abandons steps.
 - Clicking a goal or step opens a scoped Jo chat about that entity.
 - Accepted steps become accountability context for future agent cycles and conversations.
@@ -34,14 +34,15 @@ Out of scope for v1:
 
 Purcival currently has strong boundaries that the dashboard should preserve:
 
-- Each persona has its own SQLite database under `data/<persona>/memory.db`.
-- Conversation history lives in that persona database's `messages` table.
-- Summaries live in that persona database's `summaries` table and are retrieved by embedding similarity.
+- The active assistant persona is Jo, whose SQLite database lives at `data/jo/memory.db`.
+- The code still supports multiple personas, but the dashboard design targets Jo only.
+- Conversation history lives in Jo's `messages` table.
+- Summaries live in Jo's `summaries` table and are retrieved by embedding similarity.
 - Shared user context is file-based in `data/user_context.md`.
-- The Stage 5 agent loop discovers tools from `tools.create_tools()` and interacts with them only through `get_context()`, `get_methods()`, and `execute()`.
+- The agent loop discovers tools from `tools.create_tools()` and interacts with them only through `get_context()`, `get_methods()`, and `execute()`.
 - `brain.ask()` is the LLM gateway and already supports per-task model routing with `task="chat"`, `task="summary"`, and `task="reasoning"`.
 
-The dashboard introduces one new category of state: user-level goals, steps, and feedback. That state should be shared across personas, while conversations remain persona-owned.
+The dashboard introduces one new category of state: user-level goals, steps, and feedback. That state should be stored outside Jo's persona database so it can remain user-owned if more personas become active again later.
 
 ---
 
@@ -66,7 +67,7 @@ data/jo/memory.db
   tool_state
   agent state
 
-Stage 5 agent loop
+agent loop
   |
   | create_tools(...)
   v
@@ -80,9 +81,9 @@ data/user.db
 Core choices:
 
 - Use `data/user.db` for shared user-level goal state.
-- Keep all chat messages in the active persona's existing memory database.
+- Keep all dashboard chat messages in Jo's existing memory database.
 - Add explicit scope columns to `messages` and `summaries` rather than creating separate chat tables.
-- Default dashboard persona is Jo.
+- Dashboard persona is Jo.
 - Add goal tools to the existing tool registry rather than creating dashboard-specific agent logic.
 
 ---
@@ -289,9 +290,9 @@ scope_label = "default" if scope_type == "default" else f"{scope_type}:{scope_id
 
 ### Persona boundary
 
-Scoped messages still live in a persona database. A step chat with Jo lives in `data/jo/memory.db`. If a future dashboard allows Ada to chat about the same step, Ada's scoped messages would live in `data/ada/memory.db` with the same `scope_type='step'` and `scope_id`, but independent history.
+Scoped messages live in Jo's persona database. A step chat with Jo lives in `data/jo/memory.db`.
 
-For v1, the dashboard always uses Jo.
+If a future dashboard reintroduces multiple active personas, another persona could use the same `scope_type='step'` and `scope_id` in its own database with independent history. That is not v1.
 
 ---
 
@@ -352,7 +353,7 @@ get_last_summarized_id(scope: MessageScope = MessageScope.default())
 
 and ensure it calculates `MAX(message_end)` only for summaries in that same scope.
 
-`check_and_summarize(memory, scope=MessageScope.default())` should summarize only that scope. Existing Telegram and CLI paths use the default scope. Dashboard chat uses the active goal or step scope.
+`check_and_summarize(memory, scope=MessageScope.default())` should summarize only that scope. The existing CLI path uses the default scope. The Telegram path should also use the default scope if it is reactivated. Dashboard chat uses the active goal or step scope.
 
 ---
 
@@ -1002,9 +1003,9 @@ This draft proposes the following concrete decisions for Zach's review:
 
 - Use `data/user.db` for shared goals, steps, and feedback.
 - Add `scope_type` and `scope_id` columns to persona `messages` and `summaries`.
-- Keep scoped chats in the active persona database; default dashboard persona is Jo.
+- Keep scoped chats in Jo's active persona database.
 - Search active-scope summaries first, then a smaller amount of Jo's default-scope background.
-- Add `GoalTool` and `SuggestionTool` to the existing Stage 5 tool registry.
+- Add `GoalTool` and `SuggestionTool` to the existing agent tool registry.
 - Use `Design/dashboard_goals_design.md` as the canonical Goals dashboard design doc.
 
 If approved, Phase 1 should begin with the data layer and scope migration. No dashboard UI code should be written before Phase 1 data tests are passing.

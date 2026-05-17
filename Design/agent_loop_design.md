@@ -1,15 +1,21 @@
-# Purcival Stage 5 — The Self-Scheduling Agent
+# Purcival Agent Loop — The Self-Scheduling Agent
 
 ## Purpose of This Document
 
-This document defines the architecture for transforming Purcival from a
+This document defines the architecture that transformed Purcival from a
 scheduled messenger into an autonomous agent that plans its own day,
 perceives its environment through tools, reasons about what to do, and
 manages its own schedule. It covers the tool interface, the agent cycle,
 schedule management, state tracking, and integration with both the
 proactive system and user-initiated conversations.
 
-This is a design-first document. Code follows after review.
+This was originally written before the Goals dashboard work. The filename and
+active terminology now use "agent loop" to avoid confusing the completed agent
+architecture with future numbered dashboard phases.
+
+Telegram examples in this document describe the original message tool and
+historical mobile interface. Telegram is not currently operable in Zach's
+Windows setup; Jo via local CLI/dashboard is the active path.
 
 ---
 
@@ -19,7 +25,7 @@ Today, Purcival's proactive system works like this:
 
     fixed timer fires → compose message → send
 
-Stage 5 replaces this with an agent that manages its own schedule:
+The agent loop replaces this with an agent that manages its own schedule:
 
     agent wakes up → reads its own note about why it's awake →
     loads relevant tools → reasons about what to do →
@@ -244,7 +250,7 @@ schema migrations when adding new tools.
 
 ---
 
-## Concrete Tools (Stage 5)
+## Concrete Tools
 
 ### GoogleCalendarTool
 
@@ -681,9 +687,9 @@ only changing the constant.
 
 ## User Messages and Plan Updates
 
-When the user sends a message via Telegram, the conversation follows
+When the user sends a message through an active chat interface, the conversation follows
 the existing path: persist message → assemble context → call LLM →
-persist and send response. Stage 5 adds one thing: **the agent's
+persist and send response. The agent loop adds one thing: **the agent's
 upcoming plan is included in the conversation context, and the LLM
 can output schedule changes alongside its response.**
 

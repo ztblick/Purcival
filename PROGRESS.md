@@ -11,7 +11,7 @@ agent sessions. Read it in full each session. Update sections marked
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
 **Phase:** 0 — Design (no production code yet)
-**Status:** Phase 0 design doc drafted in `Design/dashboard_goals_design.md`; awaiting Zach review before Phase 1
+**Status:** Docs normalized for Windows / Jo-only / inactive Telegram context; awaiting Zach approval before Phase 1
 
 ---
 
@@ -25,7 +25,7 @@ A local web app that:
 - Lets Zach accept (✓) or reject (✗) suggested steps
 - Tracks accepted steps and holds Zach accountable to them
 - Opens a focused chat thread with the active persona about any goal or step when clicked
-- Generates new suggestions via the Stage 5 agent loop during planning cycles
+- Generates new suggestions via the agent loop during planning cycles
 - Captures user feedback (thumbs up/down on suggestions) to improve future suggestions
 
 The single-sentence framing: **Purcival gains a UI that tracks Zach's goals, suggests concrete next steps, and supports focused conversations about each.**
@@ -135,7 +135,7 @@ answer in the design doc, Zach reviews.)
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-- Phase 0 / Goals dashboard — approve `Design/dashboard_goals_design.md` as the basis for Phase 1. Proposed direction: store shared goals/steps/feedback in `data/user.db`; add typed `scope_type` + `scope_id` columns to persona `messages` and `summaries`; keep dashboard chats in Jo's existing memory infrastructure; register `GoalTool` and `SuggestionTool` through the existing Stage 5 tool registry.
+- Phase 0 / Goals dashboard — approve `Design/dashboard_goals_design.md` as the basis for Phase 1. Proposed direction: store shared goals/steps/feedback in `data/user.db`; add typed `scope_type` + `scope_id` columns to persona `messages` and `summaries`; keep dashboard chats in Jo's existing memory infrastructure; register `GoalTool` and `SuggestionTool` through the existing agent tool registry.
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -150,8 +150,9 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-17 — Documentation consistency — renamed the agent loop design doc, rewrote stale README and overall design handoff for Windows / Jo-only / inactive Telegram context, and removed active numbered-agent terminology — uncommitted.
 - 2026-05-17 — Goals dashboard Phase 0 — drafted `Design/dashboard_goals_design.md` covering shared goal schema, scoped chat architecture, tool integration, dashboard UI routes, SSE chat flow, and test strategy — uncommitted.
-- 2026-05-17 — Project docs — normalized operating docs to `AGENTS.md`, moved design-doc references to `Design/`, and logged Telegram `/status` provider-model drift for later fix — uncommitted.
+- 2026-05-17 — Project docs — normalized operating docs to `AGENTS.md`, moved design-doc references to `Design/`, and logged Telegram `/status` provider-model drift for later fix — 241f844.
 - 2026-05-16 — Goals dashboard project — scoped, phased, constraints locked. New active project. Phase 0 awaiting first session.
 - 2026-05-16 — ChatGPT integration — Implemented: brain.py (task dispatch + chatgpt provider + ollama fallback), config.py (per-task models for all 3 providers), agent.py/summarizer.py (task= param), main.py (/chatgpt switch), tests/test_brain_chatgpt.py (16/16 pass). max_completion_tokens fix applied from live API feedback.
 
@@ -176,6 +177,7 @@ Append entries; never edit prior ones.
 - **2026-05-16 — Primary persona for the dashboard is Jo.** Other personas can read goals and steps but Jo is the default for chat-on-step and suggestion generation.
 - **2026-05-16 — Step chats are scope-tagged within Purcival's existing message infrastructure.** The leading proposal for Phase 0: add a `scope` (or `entity_type` + `entity_id`) column to `messages`; null = default chat, `step:N` = step-scoped. Summarization and retrieval honor scope. Design phase confirms exact shape.
 - **2026-05-17 — Design documents live under `Design/`.** Zach clarified that all design documents should be referenced from the `Design/` directory. Operational instructions live in `AGENTS.md`.
+- **2026-05-17 — Agent loop design doc renamed.** The old numbered agent design doc became `Design/agent_loop_design.md` to avoid confusing the completed agent architecture with future numbered Goals dashboard phases.
 
 ---
 
@@ -205,7 +207,7 @@ Append entries; never edit prior ones.
 
 - `AGENTS.md` — operating manual
 - `Design/PURCIVAL_DESIGN_DOC.md` — overall system design (living)
-- `Design/STAGE5_AGENT_DESIGN.md` — agent loop architecture
+- `Design/agent_loop_design.md` — agent loop architecture
 - `Design/openai_integration_design.md` — OpenAI integration design (completed)
 - `Design/dashboard_goals_design.md` — Goals dashboard design (Phase 0 draft awaiting review)
 - `README.md` — project overview and setup
