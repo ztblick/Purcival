@@ -367,7 +367,11 @@ def test_playwright_scoped_chat_flow(tmp_path, monkeypatch):
                     "data-chat-scope-id",
                     str(step["id"]),
                 )
-                page.locator('textarea[name="message"]').fill("Can you scope this?")
+                textarea = page.locator('textarea[name="message"]')
+                textarea.fill("Can")
+                page.keyboard.press("Space")
+                page.keyboard.type("you scope this?")
+                expect(textarea).to_have_value("Can you scope this?")
                 page.locator('form[data-chat-form] button[type="submit"]').click()
 
                 expect(page.locator(".message-stack")).to_contain_text("Can you scope this?")

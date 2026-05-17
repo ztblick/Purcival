@@ -202,6 +202,10 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.target.closest("button, form, a, textarea, input")) {
+    return;
+  }
+
   const chatTarget = event.target.closest("[data-chat-scope-type][data-chat-scope-id]");
   if (!chatTarget) {
     return;
