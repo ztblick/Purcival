@@ -1,4 +1,11 @@
-<article class="goal-card {{ goal.category_class }}" data-goal-id="{{ goal.id }}">
+<article
+  class="goal-card {{ goal.category_class }}"
+  data-goal-id="{{ goal.id }}"
+  data-chat-scope-type="{{ goal.scope_type }}"
+  data-chat-scope-id="{{ goal.scope_id }}"
+  role="button"
+  tabindex="0"
+>
   <div class="card-tag">{{ goal.category }}</div>
   <div class="goal-card__body">
     <h3>{{ goal.title }}</h3>

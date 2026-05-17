@@ -240,11 +240,13 @@ The dashboard will:
 - Store shared goals, steps, and feedback in `data/user.db`.
 - Add scoped goal/step chats using Jo's existing `messages` infrastructure.
 - Let Jo propose concrete next steps during planning cycles.
-- Let Zach accept, reject, rate, complete, or abandon steps.
+- Let Zach accept, reject, complete, or abandon steps.
 - Surface accepted steps for accountability.
 
-The current implementation stage is Phase 2: dashboard skeleton and visual
-identity. Phase 1 data storage and scoped memory are implemented.
+The current implementation stage is Phase 5: agent loop suggestion generation.
+Phase 1 data storage and scoped memory are implemented; Phase 2 added the
+dashboard skeleton and visual identity; Phase 3 added real goal/step rendering
+and accept/reject flows; Phase 4 added scoped Jo chats for goals and steps.
 
 ---
 
@@ -263,10 +265,9 @@ identity. Phase 1 data storage and scoped memory are implemented.
 
 Near term:
 
-- Build Phase 2 dashboard skeleton.
-- Review the first dashboard screenshot for cyberpunk visual identity.
-- Normalize Windows test baseline.
-- Build dashboard skeleton after data layer is stable.
+- Register goal and suggestion tools with the agent loop.
+- Update planning prompts so Jo proposes 1-3 concrete suggestions tied to active goals.
+- Surface generated suggestions on the dashboard.
 
 Deferred:
 

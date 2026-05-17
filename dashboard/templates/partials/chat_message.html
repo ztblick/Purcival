@@ -1,4 +1,4 @@
-<div class="chat-message chat-message--assistant">
-  <span>Jo</span>
-  <p>I have the goal context ready when you want to turn this into a focused thread.</p>
+<div class="chat-message chat-message--{{ message.role if message else 'assistant' }}">
+  <span>{{ "Zach" if message and message.role == "user" else "Jo" }}</span>
+  <p>{{ message.content if message else "" }}</p>
 </div>

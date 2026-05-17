@@ -9,9 +9,12 @@ import pytest
 import requests
 from fastapi.testclient import TestClient
 
+import memory
+from dashboard import routes
 from dashboard.app import app
 from dashboard.motivation import MOTIVATIONAL_TITLES, title_for_date
 from goals import SharedGoalStore
+from memory import MessageScope, PersonaMemory
 from scripts.seed_dev_data import seed_mockup_data
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +24,7 @@ def test_dashboard_renders_seeded_goals(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     seed_mockup_data(SharedGoalStore(db_path))
     monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
+    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
 
     client = TestClient(app)
     response = client.get("/")
@@ -44,6 +48,7 @@ def test_dashboard_partials_render(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     seed_mockup_data(SharedGoalStore(db_path))
     monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
+    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
 
     client = TestClient(app)
 
@@ -62,11 +67,111 @@ def test_dashboard_partials_render(tmp_path, monkeypatch):
     assert "Focused Chat" in chat_response.text
 
 
+def test_scoped_chat_panel_loads_step_history(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
+    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+
+    step = next(
+        row for row in store.list_steps(status="suggested")
+        if row["title"] == "Go to Yoga6 in Palo Alto at 12pm"
+    )
+    scope = MessageScope.step(step["id"])
+    mem = PersonaMemory("jo")
+    mem.add_message("user", "Can we make this fit after school?", scope=scope)
+    mem.add_message("assistant", "Yes. Let's narrow the time window.", scope=scope)
+
+    client = TestClient(app)
+    response = client.get(f"/chat/step/{step['id']}")
+
+    assert response.status_code == 200
+    assert f"step:{step['id']}" in response.text
+    assert "Go to Yoga6 in Palo Alto at 12pm" in response.text
+    assert "Can we make this fit after school?" in response.text
+    assert "Let&#39;s narrow the time window." in response.text
+
+
+def test_scoped_chat_panel_loads_goal_history(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
+    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+
+    goal = next(
+        row for row in store.list_goals(status="active")
+        if row["title"] == "Stay active & healthy"
+    )
+    scope = MessageScope.goal(goal["id"])
+    mem = PersonaMemory("jo")
+    mem.add_message("user", "Let's rethink this goal.", scope=scope)
+
+    client = TestClient(app)
+    response = client.get(f"/chat/goal/{goal['id']}")
+
+    assert response.status_code == 200
+    assert f"goal:{goal['id']}" in response.text
+    assert "Stay active &amp; healthy" in response.text
+    assert "Let&#39;s rethink this goal." in response.text
+
+
+def test_scoped_chat_stream_persists_without_default_leak(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
+    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+    monkeypatch.setattr(routes.personas, "load_persona", lambda name: "You are Jo.")
+    monkeypatch.setattr(routes, "check_and_summarize", lambda *args, **kwargs: 0)
+
+    captured = {}
+
+    def fake_stream(messages, system, provider=None, max_tokens=2048, task="chat"):
+        captured["messages"] = messages
+        captured["system"] = system
+        yield "Scoped answer."
+
+    monkeypatch.setattr(routes.brain, "stream", fake_stream)
+
+    step = next(
+        row for row in store.list_steps(status="suggested")
+        if row["title"] == "Go to Yoga6 in Palo Alto at 12pm"
+    )
+
+    client = TestClient(app)
+    post_response = client.post(
+        f"/chat/step/{step['id']}/messages",
+        data={"message": "How should I think about this?"},
+    )
+    assert post_response.status_code == 200
+
+    stream_id = post_response.json()["stream_id"]
+    stream_response = client.get(f"/chat/streams/{stream_id}")
+
+    assert stream_response.status_code == 200
+    assert 'event: delta\ndata: {"text": "Scoped answer."}' in stream_response.text
+    assert "event: done" in stream_response.text
+    assert "ACTIVE DASHBOARD CONTEXT" in captured["system"]
+    assert "Go to Yoga6 in Palo Alto at 12pm" in captured["system"]
+
+    mem = PersonaMemory("jo")
+    scope = MessageScope.step(step["id"])
+    scoped_messages = mem.get_recent_messages(scope=scope)
+
+    assert [row["role"] for row in scoped_messages] == ["user", "assistant"]
+    assert scoped_messages[0]["content"] == "How should I think about this?"
+    assert scoped_messages[1]["content"] == "Scoped answer."
+    assert mem.get_message_count() == 0
+
+
 def test_step_accept_and_reject_routes(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)
     seed_mockup_data(store)
     monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
+    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
 
     client = TestClient(app)
     yoga_step = next(
@@ -141,6 +246,7 @@ def test_playwright_accept_reject_flow(tmp_path):
     url = f"http://127.0.0.1:{port}/"
     env = os.environ.copy()
     env["PURCIVAL_GOALS_DB"] = str(db_path)
+    env["PURCIVAL_MEMORY_DATA_DIR"] = str(tmp_path / "persona_data")
     env["PYTHONPATH"] = str(ROOT)
     server = subprocess.Popen(
         [
@@ -200,3 +306,96 @@ def test_playwright_accept_reject_flow(tmp_path):
     assert refreshed_store.get_step(yoga_step["id"])["status"] == "accepted"
     assert refreshed_store.get_step(lucid_step["id"])["status"] == "rejected"
     assert refreshed_store.list_step_feedback(lucid_step["id"]) == []
+
+
+def test_playwright_scoped_chat_flow(tmp_path, monkeypatch):
+    try:
+        from playwright.sync_api import expect, sync_playwright
+    except ImportError:
+        pytest.skip("Playwright is not installed")
+
+    db_path = tmp_path / "user.db"
+    memory_dir = tmp_path / "persona_data"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    step = next(
+        row for row in store.list_steps(status="suggested")
+        if row["title"] == "Go to Yoga6 in Palo Alto at 12pm"
+    )
+
+    port = find_free_port()
+    url = f"http://127.0.0.1:{port}/"
+    env = os.environ.copy()
+    env["PURCIVAL_GOALS_DB"] = str(db_path)
+    env["PURCIVAL_MEMORY_DATA_DIR"] = str(memory_dir)
+    env["PURCIVAL_DASHBOARD_FAKE_RESPONSE"] = "Scoped Playwright response."
+    env["PYTHONPATH"] = str(ROOT)
+    server = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "dashboard.app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    try:
+        wait_for_server(url, server)
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception:
+                try:
+                    browser = playwright.chromium.launch(channel="msedge")
+                except Exception:
+                    pytest.skip("No Playwright Chromium-compatible browser is installed")
+
+            try:
+                page = browser.new_page(viewport={"width": 1280, "height": 900})
+                page.goto(url, wait_until="networkidle")
+                page.locator(f'[data-step-id="{step["id"]}"]').click(position={"x": 20, "y": 20})
+                expect(page.locator(".chat-panel")).to_have_attribute(
+                    "data-chat-scope-id",
+                    str(step["id"]),
+                )
+                page.locator('textarea[name="message"]').fill("Can you scope this?")
+                page.locator('form[data-chat-form] button[type="submit"]').click()
+
+                expect(page.locator(".message-stack")).to_contain_text("Can you scope this?")
+                expect(page.locator(".message-stack")).to_contain_text("Scoped Playwright response.")
+
+                page.goto(url, wait_until="networkidle")
+                page.locator(f'[data-step-id="{step["id"]}"]').click(position={"x": 20, "y": 20})
+                expect(page.locator(".chat-panel")).to_have_attribute(
+                    "data-chat-scope-id",
+                    str(step["id"]),
+                )
+                expect(page.locator(".message-stack")).to_contain_text("Can you scope this?")
+                expect(page.locator(".message-stack")).to_contain_text("Scoped Playwright response.")
+            finally:
+                browser.close()
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=5)
+
+    monkeypatch.setattr(memory, "DATA_DIR", memory_dir)
+    mem = PersonaMemory("jo")
+    scope = MessageScope.step(step["id"])
+    assert mem.get_message_count() == 0
+    assert [row["role"] for row in mem.get_recent_messages(scope=scope)] == [
+        "user",
+        "assistant",
+    ]

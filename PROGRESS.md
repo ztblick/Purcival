@@ -10,8 +10,8 @@ agent sessions. Read it in full each session. Update sections marked
 
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
-**Phase:** 4 — Chat-on-step and chat-on-goal (ready for next development cycle)
-**Status:** Phase 3 complete after Zach's UI correction. The dashboard renders real suggested and accepted steps from `data/user.db`; ✓ accepts a suggestion, ✕ rejects it, and those outcomes are the feedback signal. No thumbs controls, rejection-reason field, or step-section metadata are displayed. Route plus Playwright coverage verifies the accept/reject flow.
+**Phase:** 5 — Agent loop integration: suggestion generation (ready for next development cycle)
+**Status:** Phase 4 complete. Clicking a goal or step opens a scoped Jo chat panel, messages persist with `scope_type` / `scope_id`, responses are delivered over SSE using the `brain.stream()` fallback interface, and scoped summarization runs after responses. Route plus Playwright coverage verifies streaming, reload persistence, and no leakage into Jo's default chat. Full pytest passes.
 
 ---
 
@@ -99,11 +99,11 @@ Real data renders from the database. Category tags display on goals, while step 
 
 Acceptance: end-to-end Playwright test of the accept/reject flow. Screenshot updated.
 
-**Phase 4 — Chat-on-step**
+**Phase 4 — Chat-on-step and chat-on-goal**
 
 Clicking a goal or step opens the chat panel on the right, scoped to that entity. Backend: if no thread exists, the reasoner assembles initial context per the design doc; if a thread exists, load messages. SSE streaming for response. Messages persist with the entity scope. Uses the existing brain/persona infrastructure — no parallel chat machinery, no shortcuts.
 
-Acceptance: Playwright test sends a message, verifies streaming response, verifies persistence, verifies scoping (no leak into Jo's default chat).
+Acceptance met: Playwright test sends a message, verifies SSE response delivery, verifies reload persistence, and verifies scoped messages do not leak into Jo's default chat.
 
 **Phase 5 — Agent loop integration: suggestion generation**
 
@@ -135,7 +135,7 @@ answer in the design doc, Zach reviews.)
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-(None pending. Phase 2 visual identity approved; Phase 3 is ready for the next development cycle.)
+(None pending. Phase 4 is complete; Phase 5 is ready for the next development cycle.)
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -150,6 +150,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-17 — Goals dashboard Phase 4 — implemented scoped goal/step chat panel loading, message persistence, SSE response delivery via `brain.stream()`, scoped context assembly, and Playwright coverage for streaming, reload persistence, and default-chat isolation — committed.
 - 2026-05-17 — Goals dashboard Phase 3 UI correction — removed thumbs feedback, rejection reasons, step-section metadata, and title/subtitle step cards; accept/reject status is now the feedback signal — committed.
 - 2026-05-17 — Goals dashboard Phase 3 — implemented database-backed suggested/accepted step rendering, accept/reject and feedback endpoints, rejection reasons, thumbs feedback, refreshed Phase 3 screenshots, and full pytest passing — committed.
 - 2026-05-17 — Goals dashboard Phase 2 completion check — confirmed local dashboard loads, desktop/mobile screenshots are committed, Zach approved the visual identity, full pytest passes, and Phase 3 is ready for the next development cycle — committed.

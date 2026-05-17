@@ -234,6 +234,27 @@ h3 {
     var(--shadow-panel);
 }
 
+.goal-card,
+.step-card {
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.goal-card:hover,
+.goal-card:focus-visible,
+.step-card:hover,
+.step-card:focus-visible {
+  border-color: color-mix(in srgb, var(--category-accent, var(--orange)) 68%, var(--line));
+  box-shadow:
+    0 0 30px color-mix(in srgb, var(--category-accent, var(--purple)) 32%, transparent),
+    var(--shadow-panel);
+  outline: none;
+  transform: translateY(-1px);
+}
+
 .goal-card__body {
   display: grid;
   gap: 12px;
@@ -412,6 +433,16 @@ h3 {
   background: rgba(155, 92, 255, 0.09);
 }
 
+.chat-message--user {
+  align-self: flex-end;
+  border-color: rgba(255, 138, 42, 0.34);
+  background: rgba(255, 138, 42, 0.08);
+}
+
+.chat-message--user span {
+  color: var(--orange);
+}
+
 .chat-message span,
 .composer label {
   display: block;
@@ -441,6 +472,12 @@ h3 {
 .composer button {
   justify-self: end;
   min-width: 90px;
+}
+
+.composer button:not(:disabled) {
+  color: var(--green);
+  border-color: rgba(109, 255, 179, 0.38);
+  background: rgba(109, 255, 179, 0.08);
 }
 
 @media (max-width: 980px) {

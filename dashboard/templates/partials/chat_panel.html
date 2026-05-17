@@ -1,16 +1,26 @@
-<section class="chat-panel" aria-label="Focused Jo chat">
+<section
+  class="chat-panel"
+  aria-label="Focused Jo chat"
+  {% if chat_context %}
+    data-chat-scope-type="{{ chat_context.scope_type }}"
+    data-chat-scope-id="{{ chat_context.scope_id }}"
+  {% endif %}
+>
   <div class="chat-panel__header">
     <div>
       <p class="eyebrow">Focused Chat</p>
       <h2>Jo</h2>
     </div>
+    {% if chat_context %}
+      <span class="chat-panel__status">{{ chat_context.scope_type }}:{{ chat_context.scope_id }}</span>
+    {% endif %}
   </div>
 
-  <div class="context-card {% if active_context %}{{ active_context.category_class }}{% endif %}">
-    {% if active_context and active_context.goal %}
-      <span class="card-tag card-tag--small">{{ active_context.goal.category }}</span>
-      <h3>{{ active_context.goal.title }}</h3>
-      <p>{{ active_context.title }}</p>
+  <div class="context-card {% if chat_context %}{{ chat_context.category_class }}{% endif %}">
+    {% if chat_context %}
+      <span class="card-tag card-tag--small">{{ chat_context.tag }}</span>
+      <h3>{{ chat_context.heading }}</h3>
+      <p>{{ chat_context.body }}</p>
     {% else %}
       <span class="card-tag card-tag--small">default</span>
       <h3>Choose a goal or step</h3>
@@ -18,13 +28,29 @@
     {% endif %}
   </div>
 
-  <div class="message-stack" aria-label="Chat preview">
-    {% include "partials/chat_message.html" %}
+  <div class="message-stack" aria-live="polite" aria-label="Chat messages">
+    {% if chat_messages %}
+      {% for message in chat_messages %}
+        {% include "partials/chat_message.html" %}
+      {% endfor %}
+    {% else %}
+      <div class="chat-message chat-message--assistant">
+        <span>Jo</span>
+        <p>I have the context ready when you want to turn this into a focused thread.</p>
+      </div>
+    {% endif %}
   </div>
 
-  <form class="composer" aria-label="Chat composer">
+  <form
+    class="composer"
+    aria-label="Chat composer"
+    {% if chat_context %}
+      data-chat-form
+      action="/chat/{{ chat_context.scope_type }}/{{ chat_context.scope_id }}/messages"
+    {% endif %}
+  >
     <label for="chat-message">Message Jo</label>
-    <textarea id="chat-message" name="message" rows="4" disabled></textarea>
-    <button type="button" disabled>Send</button>
+    <textarea id="chat-message" name="message" rows="4" {% if not chat_context %}disabled{% endif %}></textarea>
+    <button type="submit" {% if not chat_context %}disabled{% endif %}>Send</button>
   </form>
 </section>

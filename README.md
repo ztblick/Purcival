@@ -216,7 +216,7 @@ by git.
 
 ## Goals Dashboard
 
-Current phase: Phase 2 dashboard skeleton complete; Phase 3 ready for the next development cycle.
+Current phase: Phase 4 scoped goal/step chat complete; Phase 5 ready for the next development cycle.
 
 Canonical design doc:
 
@@ -236,7 +236,9 @@ Planned implementation phases:
 
 Phase 1 data storage and scoped memory are implemented. Phase 2 added the
 seed-backed FastAPI/Jinja dashboard skeleton and screenshot workflow. Phase 3
-starts real goal/step rendering and accept/reject flows.
+added real goal/step rendering and accept/reject flows. Phase 4 added scoped
+Jo chats for goals and steps with SSE response delivery and persistence in Jo's
+existing memory database.
 
 Run the local dashboard:
 
@@ -298,9 +300,7 @@ services are available.
 
 ## Roadmap
 
-- Goals dashboard Phase 3 real data display and accept/reject flows.
-- Scoped Jo chats for goals and steps.
-- Agent-generated suggestions tied to active goals.
+- Goals dashboard Phase 5 agent-generated suggestions tied to active goals.
 - Accountability context for accepted steps.
 - Feedback summaries to improve future suggestions.
 - Future reactivation or replacement of Telegram/mobile messaging.

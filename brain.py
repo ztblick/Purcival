@@ -25,6 +25,7 @@ Architecture note:
 import logging
 import requests
 import config
+from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -206,3 +207,26 @@ def ask(
             fallback_model = _resolve_model("ollama", task)
             return _ask_ollama(messages, system, max_tokens, fallback_model)
         raise
+
+
+def stream(
+    messages: list[dict],
+    system: str | None = None,
+    provider: str | None = None,
+    max_tokens: int = 2048,
+    task: str = "chat",
+) -> Iterator[str]:
+    """
+    Yield response text chunks for chat UIs.
+
+    Provider-native streaming can be added behind this interface later. The
+    current implementation preserves a streaming-shaped public API by yielding
+    one full response from ask().
+    """
+    yield ask(
+        messages=messages,
+        system=system,
+        provider=provider,
+        max_tokens=max_tokens,
+        task=task,
+    )

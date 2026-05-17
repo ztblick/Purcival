@@ -1,8 +1,8 @@
 # Goals Dashboard Design
 
-**Status:** Phase 3 complete; Phase 4 ready for next development cycle
+**Status:** Phase 4 complete; Phase 5 ready for next development cycle
 **Date:** 2026-05-17
-**Phase:** 3 - Real goal and step interactions
+**Phase:** 4 - Chat-on-step and chat-on-goal
 **Scope:** shared goal state, scoped conversations, dashboard UI, and agent integration
 
 ---
@@ -792,8 +792,12 @@ dashboard polish. Phase 3 is complete after Zach's UI correction: suggested and
 accepted steps render from `data/user.db`, accept/reject posts update the steps
 panel without a full-page reload, rejected steps do not ask for reasons, thumbs
 controls are not shown, step cards avoid title/subtitle treatment, and Phase 3
-screenshots plus a Playwright accept/reject flow cover the behavior. Phase 4
-should begin in the next development cycle.
+screenshots plus a Playwright accept/reject flow cover the behavior. Phase 4 is
+complete: clicking a goal or step loads a scoped Jo chat panel, messages persist
+to Jo's existing memory database with the matching scope, responses are delivered
+over SSE through the `brain.stream()` fallback interface, and Playwright verifies
+streaming, reload persistence, and default-chat isolation. Phase 5 should begin
+in the next development cycle.
 
 ---
 
@@ -857,7 +861,7 @@ Acceptance met:
 
 ### Phase 4 - Chat-on-step and chat-on-goal
 
-Implement:
+Implemented:
 
 - Chat panel loading by scope.
 - Scoped message persistence.
@@ -866,7 +870,7 @@ Implement:
 - SSE response delivery.
 - No leakage into Jo's default chat.
 
-Acceptance:
+Acceptance met:
 
 - Playwright sends a scoped message.
 - Response streams back.

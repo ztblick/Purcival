@@ -1,4 +1,11 @@
-<article class="step-card step-card--{{ step.status }} {{ step.category_class }}" data-step-id="{{ step.id }}">
+<article
+  class="step-card step-card--{{ step.status }} {{ step.category_class }}"
+  data-step-id="{{ step.id }}"
+  data-chat-scope-type="{{ step.scope_type }}"
+  data-chat-scope-id="{{ step.scope_id }}"
+  role="button"
+  tabindex="0"
+>
   <p class="step-card__text">{{ step.display_text }}</p>
 
   {% if step.status == "suggested" %}
