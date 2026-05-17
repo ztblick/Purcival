@@ -1,4 +1,4 @@
-<article class="step-card" data-step-id="{{ step.id }}">
+<article class="step-card {{ step.category_class }}" data-step-id="{{ step.id }}">
   {% if step.goal %}
     <div class="card-tag card-tag--small">{{ step.goal.category }}</div>
   {% endif %}

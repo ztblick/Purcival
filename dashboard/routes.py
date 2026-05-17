@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.templating import Jinja2Templates
 
+from dashboard.motivation import MOTIVATIONAL_TITLES
 from goals import SharedGoalStore
 
 
@@ -17,6 +18,14 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 router = APIRouter()
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
+
+
+def category_class(category: str) -> str:
+    cleaned = "".join(
+        character if character.isalnum() else "-"
+        for character in category.strip().lower()
+    )
+    return f"category-{cleaned.strip('-') or 'general'}"
 
 
 def get_store() -> SharedGoalStore:
@@ -27,6 +36,7 @@ def get_store() -> SharedGoalStore:
 def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
     goals = store.list_goals(status="active")
     steps = store.list_steps()
+    goals_by_id = {goal["id"]: goal for goal in goals}
     steps_by_goal: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for step in steps:
         steps_by_goal[step["goal_id"]].append(step)
@@ -38,8 +48,8 @@ def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
         accepted = [step for step in goal_steps if step["status"] == "accepted"]
         goal_cards.append({
             **goal,
-            "suggested_count": len(suggested),
-            "accepted_count": len(accepted),
+            "category_class": category_class(goal["category"]),
+            "steps_in_progress_count": len(accepted),
             "highlight_step": suggested[0] if suggested else accepted[0] if accepted else None,
         })
 
@@ -47,29 +57,8 @@ def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
     for goal in goal_cards:
         categories[goal["category"]].append(goal)
 
-    suggestions = [
-        {
-            **step,
-            "goal": next(
-                (goal for goal in goals if goal["id"] == step["goal_id"]),
-                None,
-            ),
-        }
-        for step in steps
-        if step["status"] == "suggested"
-    ]
-
-    accepted_steps = [
-        {
-            **step,
-            "goal": next(
-                (goal for goal in goals if goal["id"] == step["goal_id"]),
-                None,
-            ),
-        }
-        for step in steps
-        if step["status"] == "accepted"
-    ]
+    suggestions = build_step_cards(steps, goals_by_id, "suggested")
+    accepted_steps = build_step_cards(steps, goals_by_id, "accepted")
 
     active_context = suggestions[0] if suggestions else accepted_steps[0] if accepted_steps else None
 
@@ -79,7 +68,27 @@ def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
         "suggestions": suggestions,
         "accepted_steps": accepted_steps,
         "active_context": active_context,
+        "motivational_titles": MOTIVATIONAL_TITLES,
+        "initial_title": MOTIVATIONAL_TITLES[0],
     }
+
+
+def build_step_cards(
+    steps: list[dict[str, Any]],
+    goals_by_id: dict[int, dict[str, Any]],
+    status: str,
+) -> list[dict[str, Any]]:
+    cards = []
+    for step in steps:
+        if step["status"] != status:
+            continue
+        goal = goals_by_id.get(step["goal_id"])
+        cards.append({
+            **step,
+            "goal": goal,
+            "category_class": category_class(goal["category"]) if goal else "category-general",
+        })
+    return cards
 
 
 @router.get("/")

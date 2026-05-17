@@ -9,7 +9,7 @@
     </button>
   </div>
 
-  <div class="context-card">
+  <div class="context-card {% if active_context %}{{ active_context.category_class }}{% endif %}">
     {% if active_context and active_context.goal %}
       <span class="card-tag card-tag--small">{{ active_context.goal.category }}</span>
       <h3>{{ active_context.goal.title }}</h3>

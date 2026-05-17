@@ -11,7 +11,7 @@ agent sessions. Read it in full each session. Update sections marked
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
 **Phase:** 2 — Dashboard skeleton
-**Status:** Phase 2 dashboard skeleton implemented with desktop/mobile screenshots captured; awaiting Zach's visual identity review
+**Status:** Phase 2 dashboard skeleton polished after Zach's first visual review; updated desktop/mobile screenshots captured; awaiting final Phase 2 visual approval
 
 ---
 
@@ -135,7 +135,7 @@ answer in the design doc, Zach reviews.)
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-- Phase 2 / Goals dashboard — review the dashboard skeleton screenshots and cyberpunk visual identity. The skeleton renders seeded goals and suggested steps only; accept/reject and scoped chat behavior remain Phase 3+ work.
+- Phase 2 / Goals dashboard — review the polished dashboard screenshots and cyberpunk visual identity. Zach's first notes were applied: smaller rotating title text, fixed category colors, and goal-level "steps in progress" counts. The skeleton still renders seeded goals and suggested steps only; accept/reject and scoped chat behavior remain Phase 3+ work.
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -150,7 +150,8 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
-- 2026-05-17 — Goals dashboard Phase 2 — implemented the FastAPI/Jinja dashboard skeleton, cyberpunk CSS theme, static Jo chat panel, dashboard route tests, and desktop/mobile Playwright screenshots — committed.
+- 2026-05-17 — Goals dashboard Phase 2 visual polish — reduced the header title size, added rotating motivational title phrases, assigned stable category colors, replaced goal suggested/accepted counts with steps-in-progress counts, refreshed screenshots, and kept full pytest passing — committed.
+- 2026-05-17 — Goals dashboard Phase 2 — implemented the FastAPI/Jinja dashboard skeleton, cyberpunk CSS theme, static Jo chat panel, dashboard route tests, and desktop/mobile Playwright screenshots — e8fd5fe.
 - 2026-05-17 — Test baseline cleanup — marked live OpenAI / Google / Ollama tests as opt-in, updated stale proactive and summarizer tests, and restored full pytest to passing — committed.
 - 2026-05-17 — Goals dashboard Phase 1 — implemented shared `data/user.db` goal storage, scoped persona messages/summaries, scoped summarization/context hooks, idempotent mockup seed data, and focused data-layer tests — committed.
 - 2026-05-17 — Documentation consistency — renamed the agent loop design doc, rewrote stale README and overall design handoff for Windows / Jo-only / inactive Telegram context, and removed active numbered-agent terminology — uncommitted.
@@ -214,7 +215,7 @@ Append entries; never edit prior ones.
 - `Design/PURCIVAL_DESIGN_DOC.md` — overall system design (living)
 - `Design/agent_loop_design.md` — agent loop architecture
 - `Design/openai_integration_design.md` — OpenAI integration design (completed)
-- `Design/dashboard_goals_design.md` — Goals dashboard design (Phase 2 skeleton next)
+- `Design/dashboard_goals_design.md` — Goals dashboard design
 - `README.md` — project overview and setup
 
 If any of these go stale because of changes you make, update them in the same session.

@@ -1,4 +1,4 @@
-<article class="goal-card" data-goal-id="{{ goal.id }}">
+<article class="goal-card {{ goal.category_class }}" data-goal-id="{{ goal.id }}">
   <div class="card-tag">{{ goal.category }}</div>
   <div class="goal-card__body">
     <h3>{{ goal.title }}</h3>
@@ -9,7 +9,6 @@
     {% endif %}
   </div>
   <footer class="card-meta">
-    <span>{{ goal.suggested_count }} suggested</span>
-    <span>{{ goal.accepted_count }} accepted</span>
+    <span>{{ goal.steps_in_progress_count }} steps in progress</span>
   </footer>
 </article>

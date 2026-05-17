@@ -1,6 +1,6 @@
 # Goals Dashboard Design
 
-**Status:** Phase 2 skeleton implemented; visual review pending
+**Status:** Phase 2 skeleton polished; visual review pending
 **Date:** 2026-05-17
 **Phase:** 2 - Dashboard skeleton
 **Scope:** shared goal state, scoped conversations, dashboard UI, and agent integration
