@@ -34,6 +34,7 @@ import uuid
 from datetime import datetime
 
 import brain
+import config
 from memory import PersonaMemory
 from context import assemble_context, DEVICE_TELEGRAM
 from tools.base import Tool, ToolMethod
@@ -43,7 +44,6 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 
-AGENT_REASONING_PROVIDER = "claude"
 AGENT_REASONING_MAX_TOKENS = 4096
 PLANNING_CYCLE_MAX_RETRIES = 3
 
@@ -425,8 +425,8 @@ async def run_agent_cycle(
         llm_response = brain.ask(
             messages,
             system=system_prompt,
-            provider=AGENT_REASONING_PROVIDER,
             max_tokens=AGENT_REASONING_MAX_TOKENS,
+            task="reasoning",
         )
     except Exception as e:
         logger.error(f"Cycle {cycle_id}: reasoning failed: {e}")
@@ -435,7 +435,7 @@ async def run_agent_cycle(
             trigger_purpose=trigger_purpose, narrative_in=narrative_state,
             tool_contexts=json.dumps(tool_contexts),
             skipped=True, skip_reason=f"LLM call failed: {e}",
-            provider=AGENT_REASONING_PROVIDER,
+            provider=config.DEFAULT_PROVIDER,
         )
         _ensure_future_plan(memory, tools, schedule_config)
         return False
@@ -458,7 +458,7 @@ async def run_agent_cycle(
             tool_contexts=json.dumps(tool_contexts) if tool_contexts else None,
             narrative_in=narrative_state, llm_response=llm_response,
             skipped=True, skip_reason="Response truncated — missing required tags",
-            provider=AGENT_REASONING_PROVIDER,
+            provider=config.DEFAULT_PROVIDER,
         )
         _ensure_future_plan(memory, tools, schedule_config)
         return False
@@ -580,7 +580,7 @@ async def run_agent_cycle(
         narrative_in=narrative_state, llm_response=llm_response,
         actions_taken=json.dumps(actions_taken) if actions_taken else None,
         narrative_out=narrative_out, skipped=False,
-        provider=AGENT_REASONING_PROVIDER,
+        provider=config.DEFAULT_PROVIDER,
     )
 
     # --- Step 7: Ensure future plan exists ---

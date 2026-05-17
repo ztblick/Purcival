@@ -411,6 +411,7 @@ def _print_banner(provider: str, persona_name: str, memory: PersonaMemory, debug
         "\n"
         "[status]Commands:[/status]\n"
         "  /claude    — switch to Claude\n"
+        "  /chatgpt   — switch to ChatGPT\n"
         "  /ollama    — switch to Ollama\n"
         "  /persona   — switch persona\n"
         "  /schedule  — configure agent wake/sleep times & action limit\n"
@@ -473,6 +474,11 @@ def chat_loop(provider: str, persona_name: str, debug: bool = False):
             console.print(f"[system]— switched to [assistant]{provider}[/assistant] —[/system]\n")
             continue
 
+        if user_input.lower() == "/chatgpt":
+            provider = "chatgpt"
+            console.print(f"[system]— switched to [assistant]{provider}[/assistant] —[/system]\n")
+            continue
+
         if user_input.lower() == "/persona":
             persona_name = _pick_persona()
             persona_prompt = personas.load_persona(persona_name)
@@ -489,8 +495,12 @@ def chat_loop(provider: str, persona_name: str, debug: bool = False):
             continue
 
         if user_input.lower() == "/status":
-            model = (config.CLAUDE_MODEL if provider == "claude"
-                     else config.OLLAMA_MODEL)
+            _chat_models = {
+                "claude":  config.CLAUDE_CHAT_MODEL,
+                "chatgpt": config.CHATGPT_CHAT_MODEL,
+                "ollama":  config.OLLAMA_CHAT_MODEL,
+            }
+            model = _chat_models.get(provider, provider)
             total = memory.get_message_count()
             summaries = len(memory.get_all_summaries())
             active_triggers = memory.get_active_triggers()
@@ -639,7 +649,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-p", "--provider", type=str,
-        choices=["claude", "ollama"],
+        choices=["claude", "chatgpt", "ollama"],
         default=config.DEFAULT_PROVIDER,
         help="LLM provider to use (default: from .env)",
     )

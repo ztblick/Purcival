@@ -48,12 +48,6 @@ SUMMARIZE_BATCH_TOKENS = 3_000
 # processed on subsequent messages.
 MAX_BATCHES_PER_PASS = 5
 
-# Use Claude for summarization. Local models have not met the quality
-# bar for accurate, hallucination-free summaries. Summarization is
-# infrequent (every ~24K tokens of conversation) so API cost stays low,
-# and summary quality compounds over time as the database grows.
-SUMMARIZE_PROVIDER = "claude"
-
 # --- Summarization Prompt ---
 
 SUMMARIZE_SYSTEM_PROMPT = """\
@@ -140,7 +134,7 @@ def _generate_summary(messages: list[dict]) -> str:
     summary = brain.ask(
         messages=[{"role": "user", "content": user_prompt}],
         system=SUMMARIZE_SYSTEM_PROMPT,
-        provider=SUMMARIZE_PROVIDER,
+        task="summary",
     )
 
     return summary.strip()

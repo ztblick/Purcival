@@ -4,6 +4,12 @@ Configuration loader.
 Reads settings from .env file and environment variables.
 This is the single source of truth for all config — no other file
 should read environment variables directly.
+
+Provider selection:
+    Set DEFAULT_PROVIDER to "claude", "chatgpt", or "ollama".
+    That single value routes all call sites (chat, summary, reasoning)
+    to the corresponding provider family. Individual per-task models
+    within each family can be overridden via their own env vars.
 """
 
 import os
@@ -14,17 +20,27 @@ load_dotenv()
 
 
 # --- Provider Configuration ---
-# Which LLM provider to use by default: "claude" or "ollama"
+# "claude", "chatgpt", or "ollama" — the single lever for the whole system.
 DEFAULT_PROVIDER = os.getenv("DEFAULT_PROVIDER", "ollama")
 
 # --- Claude (Anthropic API) ---
-# Optional for now — set to empty string if not configured
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+ANTHROPIC_API_KEY      = os.getenv("ANTHROPIC_API_KEY", "")
+CLAUDE_CHAT_MODEL      = os.getenv("CLAUDE_CHAT_MODEL",      "claude-sonnet-4-6")
+CLAUDE_SUMMARY_MODEL   = os.getenv("CLAUDE_SUMMARY_MODEL",   "claude-haiku-4-5-20251001")
+CLAUDE_REASONING_MODEL = os.getenv("CLAUDE_REASONING_MODEL", "claude-opus-4-7")
+
+# --- ChatGPT (OpenAI API) ---
+# Key uses the standard OPENAI_API_KEY env var name; provider name in code is "chatgpt".
+OPENAI_API_KEY          = os.getenv("OPENAI_API_KEY", "")
+CHATGPT_CHAT_MODEL      = os.getenv("CHATGPT_CHAT_MODEL",      "gpt-5.4-mini")
+CHATGPT_SUMMARY_MODEL   = os.getenv("CHATGPT_SUMMARY_MODEL",   "gpt-5.4-nano")
+CHATGPT_REASONING_MODEL = os.getenv("CHATGPT_REASONING_MODEL", "gpt-5.5")
 
 # --- Ollama (local inference) ---
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "phi4")
+OLLAMA_BASE_URL         = os.getenv("OLLAMA_BASE_URL",        "http://localhost:11434")
+OLLAMA_CHAT_MODEL       = os.getenv("OLLAMA_CHAT_MODEL",      "phi4")
+OLLAMA_SUMMARY_MODEL    = os.getenv("OLLAMA_SUMMARY_MODEL",   "phi4")
+OLLAMA_REASONING_MODEL  = os.getenv("OLLAMA_REASONING_MODEL", "phi4")
 
 # --- Personas ---
 # Which persona to load by default (filename without .md extension)
