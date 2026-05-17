@@ -68,17 +68,8 @@ def prepare_phase3_demo_data(db_path: Path):
         ),
         None,
     )
-    lucid_step = next(
-        (
-            step for step in steps
-            if step["title"] == "Continue learning about LucidAI and their tech"
-        ),
-        None,
-    )
     if yoga_step:
         store.accept_step(yoga_step["id"])
-    if lucid_step:
-        store.record_step_feedback(lucid_step["id"], "thumbs_down")
 
 
 def main():

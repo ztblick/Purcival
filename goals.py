@@ -21,9 +21,6 @@ STEP_STATUSES = {"suggested", "accepted", "rejected", "completed", "abandoned"}
 STEP_SOURCES = {"user", "agent_planning", "dashboard_seed"}
 
 FEEDBACK_KINDS = {
-    "thumbs_up",
-    "thumbs_down",
-    "rejection_reason",
     "completion_note",
     "abandon_reason",
     "freeform_note",
@@ -111,9 +108,6 @@ class SharedGoalStore:
 
                     FOREIGN KEY (step_id) REFERENCES steps(id) ON DELETE CASCADE,
                     CHECK (kind IN (
-                        'thumbs_up',
-                        'thumbs_down',
-                        'rejection_reason',
                         'completion_note',
                         'abandon_reason',
                         'freeform_note'
@@ -378,31 +372,16 @@ class SharedGoalStore:
             raise ValueError("Only suggested steps can be accepted")
         return self.update_step_status(step_id, "accepted")
 
-    def reject_step(self, step_id: int, reason: str | None = None) -> bool:
-        """Mark a suggested step rejected and optionally capture the reason."""
+    def reject_step(self, step_id: int) -> bool:
+        """Mark a suggested step rejected."""
         step = self.get_step(step_id)
         if step is None:
             return False
         if step["status"] not in {"suggested", "rejected"}:
             raise ValueError("Only suggested steps can be rejected")
         if step["status"] == "rejected":
-            if reason and reason.strip():
-                self.add_step_feedback(step_id, "rejection_reason", reason.strip())
             return True
-        updated = self.update_step_status(step_id, "rejected")
-        if updated and reason and reason.strip():
-            self.add_step_feedback(step_id, "rejection_reason", reason.strip())
-        return updated
-
-    def record_step_feedback(
-        self,
-        step_id: int,
-        kind: str,
-        value: str | None = None,
-    ) -> int:
-        """Record UI feedback for a step."""
-        cleaned_value = value.strip() if value and value.strip() else None
-        return self.add_step_feedback(step_id, kind, cleaned_value)
+        return self.update_step_status(step_id, "rejected")
 
     def add_step_feedback(
         self,

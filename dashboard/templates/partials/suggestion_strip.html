@@ -1,34 +1,11 @@
 <section id="steps-panel" class="suggestion-strip" aria-labelledby="suggestions-heading">
   <div class="section-heading">
-    <p class="eyebrow">Context</p>
     <h2 id="suggestions-heading">Steps</h2>
   </div>
 
-  <div class="step-group">
-    <div class="step-group__header">
-      <span>Open suggestions</span>
-      <span>{{ suggestions|length }}</span>
-    </div>
-    <div class="step-grid">
-      {% for step in suggestions %}
-        {% include "partials/step_card.html" %}
-      {% else %}
-        <p class="empty-state">No open suggestions.</p>
-      {% endfor %}
-    </div>
-  </div>
-
-  <div class="step-group step-group--accepted">
-    <div class="step-group__header">
-      <span>Accepted</span>
-      <span>{{ accepted_steps|length }}</span>
-    </div>
-    <div class="step-grid">
-      {% for step in accepted_steps %}
-        {% include "partials/step_card.html" %}
-      {% else %}
-        <p class="empty-state">No accepted steps yet.</p>
-      {% endfor %}
-    </div>
+  <div class="step-grid">
+    {% for step in visible_steps %}
+      {% include "partials/step_card.html" %}
+    {% endfor %}
   </div>
 </section>

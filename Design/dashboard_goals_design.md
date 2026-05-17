@@ -17,7 +17,7 @@ The v1 frame is:
 
 - Zach creates goals.
 - Jo proposes one-shot steps toward those goals during planning cycles.
-- Zach accepts, rejects, rates, completes, or abandons steps.
+- Zach accepts, rejects, completes, or abandons steps.
 - Clicking a goal or step opens a scoped Jo chat about that entity.
 - Accepted steps become accountability context for future agent cycles and conversations.
 
@@ -42,7 +42,7 @@ Purcival currently has strong boundaries that the dashboard should preserve:
 - The agent loop discovers tools from `tools.create_tools()` and interacts with them only through `get_context()`, `get_methods()`, and `execute()`.
 - `brain.ask()` is the LLM gateway and already supports per-task model routing with `task="chat"`, `task="summary"`, and `task="reasoning"`.
 
-The dashboard introduces one new category of state: user-level goals, steps, and feedback. That state should be stored outside Jo's persona database so it can remain user-owned if more personas become active again later.
+The dashboard introduces one new category of state: user-level goals, steps, and sparse future feedback. That state should be stored outside Jo's persona database so it can remain user-owned if more personas become active again later. In the v1 UI, accept/reject status is the suggestion feedback signal; thumbs and rejection-reason controls are intentionally not shown.
 
 ---
 
@@ -204,9 +204,6 @@ CREATE TABLE step_feedback (
 
     FOREIGN KEY (step_id) REFERENCES steps(id) ON DELETE CASCADE,
     CHECK (kind IN (
-        'thumbs_up',
-        'thumbs_down',
-        'rejection_reason',
         'completion_note',
         'abandon_reason',
         'freeform_note'
@@ -222,9 +219,9 @@ Use `kind` + `value` rather than many nullable columns. Feedback is sparse and l
 Examples:
 
 ```text
-kind='thumbs_down', value=NULL
-kind='rejection_reason', value='Too vague; needs a concrete appointment time.'
 kind='completion_note', value='Went to the 6pm class.'
+kind='abandon_reason', value='No longer relevant this week.'
+kind='freeform_note', value='Useful context from chat.'
 ```
 
 ---
@@ -565,8 +562,8 @@ Planning context should include:
 - Suggested steps.
 - Accepted steps.
 - Recently completed steps.
-- Recently rejected steps with rejection reasons.
-- Thumbs-up/down feedback patterns if available.
+- Recently rejected steps.
+- Acceptance/rejection patterns if available.
 
 The prompt should explicitly cap new suggestions:
 
@@ -657,7 +654,6 @@ Step state routes:
 ```text
 POST /steps/{step_id}/accept
 POST /steps/{step_id}/reject
-POST /steps/{step_id}/feedback
 POST /steps/{step_id}/complete
 POST /steps/{step_id}/abandon
 ```
@@ -692,7 +688,6 @@ Why a `stream_id`:
 Use HTMX for:
 
 - Accept/reject buttons.
-- Step feedback buttons.
 - Completing or abandoning steps.
 - Loading chat panel partials.
 - Refreshing strips after state changes.
@@ -781,8 +776,8 @@ Layout:
 - Dashboard title changes once per calendar day, not on a timer.
 - The title and goal rail are merged to preserve vertical space for chat.
 - Goal cards are compact and do not surface step details or step counts.
-- Step cards are larger than goal cards and show only enough text to identify
-  the suggestion; full context belongs in the focused Jo chat.
+- Step cards are larger than goal cards and show only one compact suggestion
+  text, not title/subtitle metadata; full context belongs in the focused Jo chat.
 - Mobile: stack strips vertically and turn chat into a full-width drawer.
 
 Phase 2 visual review moved the dashboard toward a chat-first layout: goals and
@@ -793,11 +788,12 @@ and revise goals and steps through conversation.
 Phase 2 acceptance is screenshot-driven. Do not bury visual decisions in code without showing Zach.
 
 Phase 2 was approved by Zach on 2026-05-17 after the compact, chat-first
-dashboard polish. Phase 3 is complete: suggested and accepted steps render from
-`data/user.db`, accept/reject and feedback posts update the steps panel without
-a full-page reload, rejection reasons persist to `step_feedback`, thumbs
-feedback is captured, and Phase 3 screenshots plus a Playwright accept/reject
-flow cover the behavior. Phase 4 should begin in the next development cycle.
+dashboard polish. Phase 3 is complete after Zach's UI correction: suggested and
+accepted steps render from `data/user.db`, accept/reject posts update the steps
+panel without a full-page reload, rejected steps do not ask for reasons, thumbs
+controls are not shown, step cards avoid title/subtitle treatment, and Phase 3
+screenshots plus a Playwright accept/reject flow cover the behavior. Phase 4
+should begin in the next development cycle.
 
 ---
 
@@ -851,8 +847,6 @@ Implemented:
 
 - Render real goals and steps from `data/user.db`.
 - Accept/reject suggested steps.
-- Capture rejection reasons.
-- Capture thumbs feedback.
 - Display accepted steps distinctly.
 - HTMX partial updates without full reload.
 
@@ -968,7 +962,6 @@ Routes:
 
 - Dashboard page renders with seed data.
 - Accept/reject endpoints mutate state and return updated partials.
-- Feedback endpoint records feedback.
 - Chat POST validates scope and stores user message.
 
 ### E2E tests
@@ -977,7 +970,7 @@ Use Playwright:
 
 - Dashboard loads and matches expected core layout.
 - Accept a suggested step; it moves into accepted visual state.
-- Reject a suggested step with a reason; reason is stored.
+- Reject a suggested step; it leaves the visible step list and stores no reason.
 - Open a step chat, send a message, receive streamed assistant response.
 - Reload page; scoped messages still appear.
 - Verify Jo default chat has no step-scoped message leak.

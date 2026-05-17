@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 from collections import defaultdict
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
 from dashboard.motivation import title_for_date
@@ -49,8 +49,8 @@ def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
     for goal in goal_cards:
         categories[goal["category"]].append(goal)
 
-    suggestions = build_step_cards(store, steps, goals_by_id, "suggested")
-    accepted_steps = build_step_cards(store, steps, goals_by_id, "accepted")
+    suggestions = build_step_cards(steps, goals_by_id, "suggested")
+    accepted_steps = build_step_cards(steps, goals_by_id, "accepted")
 
     active_context = suggestions[0] if suggestions else accepted_steps[0] if accepted_steps else None
 
@@ -59,13 +59,13 @@ def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
         "goals": goal_cards,
         "suggestions": suggestions,
         "accepted_steps": accepted_steps,
+        "visible_steps": suggestions + accepted_steps,
         "active_context": active_context,
         "initial_title": title_for_date(),
     }
 
 
 def build_step_cards(
-    store: SharedGoalStore,
     steps: list[dict[str, Any]],
     goals_by_id: dict[int, dict[str, Any]],
     status: str,
@@ -77,15 +77,11 @@ def build_step_cards(
         goal = goals_by_id.get(step["goal_id"])
         if goal is None:
             continue
-        feedback = store.list_step_feedback(step["id"])
-        feedback_kinds = {row["kind"] for row in feedback}
         cards.append({
             **step,
             "goal": goal,
             "category_class": category_class(goal["category"]),
-            "feedback": feedback,
-            "has_thumbs_up": "thumbs_up" in feedback_kinds,
-            "has_thumbs_down": "thumbs_down" in feedback_kinds,
+            "display_text": step["title"],
         })
     return cards
 
@@ -148,24 +144,10 @@ def accept_step(step_id: int, request: Request):
 def reject_step(
     step_id: int,
     request: Request,
-    reason: Annotated[str | None, Form()] = None,
 ):
     try:
-        if not get_store().reject_step(step_id, reason):
+        if not get_store().reject_step(step_id):
             raise HTTPException(status_code=404, detail="Step not found")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return render_suggestion_strip(request)
-
-
-@router.post("/steps/{step_id}/feedback")
-def step_feedback(
-    step_id: int,
-    request: Request,
-    kind: Annotated[str, Form()],
-):
-    try:
-        get_store().record_step_feedback(step_id, kind)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return render_suggestion_strip(request)

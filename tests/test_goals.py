@@ -59,7 +59,7 @@ def test_step_crud_status_timestamps_and_feedback(tmp_path):
     assert accepted["accepted_at"] is not None
     assert accepted["last_touched_at"] is not None
 
-    feedback_id = store.add_step_feedback(step_id, "thumbs_up")
+    feedback_id = store.add_step_feedback(step_id, "completion_note")
     reason_id = store.add_step_feedback(
         step_id,
         "freeform_note",
@@ -71,7 +71,7 @@ def test_step_crud_status_timestamps_and_feedback(tmp_path):
     assert feedback[1]["value"] == "Good because it has a concrete time."
 
 
-def test_accept_reject_and_feedback_helpers(tmp_path):
+def test_accept_and_reject_helpers(tmp_path):
     store = make_store(tmp_path)
     goal_id = store.create_goal("career", "Learn more about AI safety")
     accepted_id = store.create_step(goal_id, "Read one AI safety paper")
@@ -80,27 +80,21 @@ def test_accept_reject_and_feedback_helpers(tmp_path):
     assert store.accept_step(accepted_id) is True
     assert store.get_step(accepted_id)["status"] == "accepted"
     with pytest.raises(ValueError):
-        store.reject_step(accepted_id, "Changed my mind too late.")
+        store.reject_step(accepted_id)
 
-    feedback_id = store.record_step_feedback(accepted_id, "thumbs_up", "  ")
-    assert store.list_step_feedback(accepted_id)[0]["id"] == feedback_id
-    assert store.list_step_feedback(accepted_id)[0]["value"] is None
-
-    assert store.reject_step(rejected_id, "Too vague for this week.") is True
+    assert store.reject_step(rejected_id) is True
     rejected = store.get_step(rejected_id)
-    feedback = store.list_step_feedback(rejected_id)
 
     assert rejected["status"] == "rejected"
     assert rejected["rejected_at"] is not None
-    assert feedback[0]["kind"] == "rejection_reason"
-    assert feedback[0]["value"] == "Too vague for this week."
+    assert store.list_step_feedback(rejected_id) == []
 
 
 def test_goal_delete_cascades_steps_and_feedback(tmp_path):
     store = make_store(tmp_path)
     goal_id = store.create_goal("career", "Learn more about AI safety")
     step_id = store.create_step(goal_id, "Continue learning about LucidAI")
-    store.add_step_feedback(step_id, "thumbs_down")
+    store.add_step_feedback(step_id, "freeform_note")
 
     assert store.delete_goal(goal_id) is True
     assert store.get_step(step_id) is None
@@ -121,7 +115,7 @@ def test_validation_rejects_invalid_values(tmp_path):
     with pytest.raises(ValueError):
         store.create_step(goal_id, "Bad source", source="agent")
     with pytest.raises(ValueError):
-        store.add_step_feedback(999, "thumbs_up")
+        store.add_step_feedback(999, "completion_note")
 
 
 def test_seed_mockup_data_is_idempotent(tmp_path):

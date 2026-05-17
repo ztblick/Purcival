@@ -11,7 +11,7 @@ agent sessions. Read it in full each session. Update sections marked
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
 **Phase:** 4 — Chat-on-step and chat-on-goal (ready for next development cycle)
-**Status:** Phase 3 complete. The dashboard renders real suggested and accepted steps from `data/user.db`, captures accept/reject/thumbs feedback without full-page reloads, and has route plus Playwright coverage for the accept/reject flow.
+**Status:** Phase 3 complete after Zach's UI correction. The dashboard renders real suggested and accepted steps from `data/user.db`; ✓ accepts a suggestion, ✕ rejects it, and those outcomes are the feedback signal. No thumbs controls, rejection-reason field, or step-section metadata are displayed. Route plus Playwright coverage verifies the accept/reject flow.
 
 ---
 
@@ -26,7 +26,7 @@ A local web app that:
 - Tracks accepted steps and holds Zach accountable to them
 - Opens a focused chat thread with the active persona about any goal or step when clicked
 - Generates new suggestions via the agent loop during planning cycles
-- Captures user feedback (thumbs up/down on suggestions) to improve future suggestions
+- Uses accept/reject outcomes as feedback to improve future suggestions
 
 The single-sentence framing: **Purcival gains a UI that tracks Zach's goals, suggests concrete next steps, and supports focused conversations about each.**
 
@@ -95,7 +95,7 @@ Acceptance: Zach reviews the screenshot and approves the visual identity.
 
 **Phase 3 — Goal and step display, accept/reject**
 
-Real data renders from the database. Category tags display. Steps in `status='suggested'` show ✓ and ✗ buttons. ✓ transitions to `accepted`. ✗ transitions to `rejected`, optionally prompting for a reason (captured to `step_feedback`). Thumbs-up / thumbs-down on suggestion cards capture rating feedback. Accepted steps display alongside open suggestions, visually distinct. HTMX endpoints handle state transitions; full page never reloads.
+Real data renders from the database. Category tags display on goals, while step cards stay minimal. Steps in `status='suggested'` show ✓ and ✗ buttons. ✓ transitions to `accepted`. ✗ transitions to `rejected` without asking for a reason. Accepted steps display alongside open suggestions, visually distinct but without extra status metadata. HTMX endpoints handle state transitions; full page never reloads.
 
 Acceptance: end-to-end Playwright test of the accept/reject flow. Screenshot updated.
 
@@ -119,7 +119,7 @@ Acceptance: end-to-end test of "accept a step, ignore it, see it referenced in n
 
 **Phase 7 — Feedback loop polish**
 
-Aggregated feedback (acceptance rates per category, thumbs ratings, rejection reasons) gets summarized into the planning prompt: e.g., "Zach has accepted N of M suggestions tagged Health, rejected most Money suggestions, gave thumbs-down on early-morning commitments." Text summarization at this stage — not a fine-tuned scorer.
+Aggregated feedback (acceptance and rejection rates per category/pattern) gets summarized into the planning prompt: e.g., "Zach has accepted N of M suggestions tagged Health and rejected most Money suggestions." Text summarization at this stage — not a fine-tuned scorer.
 
 Acceptance: subjective — Zach reviews the next week's suggestions and confirms they feel better-tuned.
 
@@ -150,6 +150,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-17 — Goals dashboard Phase 3 UI correction — removed thumbs feedback, rejection reasons, step-section metadata, and title/subtitle step cards; accept/reject status is now the feedback signal — committed.
 - 2026-05-17 — Goals dashboard Phase 3 — implemented database-backed suggested/accepted step rendering, accept/reject and feedback endpoints, rejection reasons, thumbs feedback, refreshed Phase 3 screenshots, and full pytest passing — committed.
 - 2026-05-17 — Goals dashboard Phase 2 completion check — confirmed local dashboard loads, desktop/mobile screenshots are committed, Zach approved the visual identity, full pytest passes, and Phase 3 is ready for the next development cycle — committed.
 - 2026-05-17 — Goals dashboard Phase 2 compact rail polish — merged the title and goals rail, made goals smaller than steps, removed step details/counts from goal cards, reduced step cards to concise prompts, refreshed screenshots, and kept dashboard tests passing — caf6fd9.
@@ -189,6 +190,7 @@ Append entries; never edit prior ones.
 - **2026-05-17 — Goals dashboard Phase 1 began from the approved Phase 0 design.** Zach explicitly asked to begin Phase 1 after reviewing the dashboard design and mockup direction. Implementation follows the approved `data/user.db` + typed message scope design.
 - **2026-05-17 — Live integration tests are opt-in during dashboard design.** OpenAI, Google Calendar, and live Ollama summarization tests are skipped by default under pytest. Run them with `PURCIVAL_RUN_LIVE_TESTS=1` plus the relevant API keys, credentials, or local services. This keeps dashboard data/UI work from being blocked by secondary integrations.
 - **2026-05-17 — Goals dashboard is chat-first.** Zach clarified that chatting with Jo is the main way goals, suggestions, and steps should change. Dashboard goal/step controls should stay limited; manual editing is not the product center.
+- **2026-05-17 — Goals dashboard feedback is accept/reject only.** Zach clarified that ✓ means the suggestion was good enough to accept, ✕ means it was bad enough to reject, and Jo should infer why from context rather than asking for thumbs or rejection reasons.
 
 ---
 

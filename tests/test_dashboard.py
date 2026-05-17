@@ -32,9 +32,10 @@ def test_dashboard_renders_seeded_goals(tmp_path, monkeypatch):
     assert "steps in progress" not in response.text
     assert "suggested</span>" not in response.text
     assert "dashboard_seed" not in response.text
-    assert "Open suggestions" in response.text
-    assert "Accepted" in response.text
-    assert "Reason optional" in response.text
+    assert "Open suggestions" not in response.text
+    assert "Accepted" not in response.text
+    assert "Reason optional" not in response.text
+    assert "Thumbs up" not in response.text
     assert "Steps" in response.text
     assert "Jo" in response.text
 
@@ -61,7 +62,7 @@ def test_dashboard_partials_render(tmp_path, monkeypatch):
     assert "Focused Chat" in chat_response.text
 
 
-def test_step_accept_reject_and_feedback_routes(tmp_path, monkeypatch):
+def test_step_accept_and_reject_routes(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)
     seed_mockup_data(store)
@@ -77,30 +78,18 @@ def test_step_accept_reject_and_feedback_routes(tmp_path, monkeypatch):
         if step["title"] == "Continue learning about LucidAI and their tech"
     )
 
-    feedback_response = client.post(
-        f"/steps/{lucid_step['id']}/feedback",
-        data={"kind": "thumbs_down"},
-    )
-    assert feedback_response.status_code == 200
-    assert "icon-button--active" in feedback_response.text
-
     accept_response = client.post(f"/steps/{yoga_step['id']}/accept")
     assert accept_response.status_code == 200
     assert "step-card--accepted" in accept_response.text
     assert SharedGoalStore(db_path).get_step(yoga_step["id"])["status"] == "accepted"
 
-    reject_response = client.post(
-        f"/steps/{lucid_step['id']}/reject",
-        data={"reason": "Too vague; needs a concrete source."},
-    )
+    reject_response = client.post(f"/steps/{lucid_step['id']}/reject")
     assert reject_response.status_code == 200
 
     refreshed_store = SharedGoalStore(db_path)
     rejected = refreshed_store.get_step(lucid_step["id"])
-    feedback = refreshed_store.list_step_feedback(lucid_step["id"])
     assert rejected["status"] == "rejected"
-    assert feedback[-1]["kind"] == "rejection_reason"
-    assert feedback[-1]["value"] == "Too vague; needs a concrete source."
+    assert refreshed_store.list_step_feedback(lucid_step["id"]) == []
 
 
 def test_title_for_date_is_stable_for_same_day():
@@ -192,12 +181,9 @@ def test_playwright_accept_reject_flow(tmp_path):
                 accepted_card = page.locator(
                     f'.step-card--accepted[data-step-id="{yoga_step["id"]}"]'
                 )
-                expect(accepted_card).to_contain_text("accepted")
+                expect(accepted_card).to_contain_text("Go to Yoga6 in Palo Alto at 12pm")
 
                 reject_card = page.locator(f'[data-step-id="{lucid_step["id"]}"]')
-                reject_card.locator('input[name="reason"]').fill(
-                    "Not concrete enough for this week."
-                )
                 reject_card.locator(".decision-button--reject").click()
                 expect(page.locator(f'[data-step-id="{lucid_step["id"]}"]')).to_have_count(0)
             finally:
@@ -213,6 +199,4 @@ def test_playwright_accept_reject_flow(tmp_path):
     refreshed_store = SharedGoalStore(db_path)
     assert refreshed_store.get_step(yoga_step["id"])["status"] == "accepted"
     assert refreshed_store.get_step(lucid_step["id"])["status"] == "rejected"
-    feedback = refreshed_store.list_step_feedback(lucid_step["id"])
-    assert feedback[-1]["kind"] == "rejection_reason"
-    assert feedback[-1]["value"] == "Not concrete enough for this week."
+    assert refreshed_store.list_step_feedback(lucid_step["id"]) == []

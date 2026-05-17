@@ -1,43 +1,7 @@
 <article class="step-card step-card--{{ step.status }} {{ step.category_class }}" data-step-id="{{ step.id }}">
-  <div class="step-card__topline">
-    {% if step.goal %}
-      <div class="card-tag card-tag--small">{{ step.goal.category }}</div>
-    {% endif %}
-    <span class="step-status">{{ "open" if step.status == "suggested" else step.status }}</span>
-  </div>
-
-  <h3>{{ step.title }}</h3>
-
-  {% if step.rationale %}
-    <p>{{ step.rationale }}</p>
-  {% endif %}
+  <p class="step-card__text">{{ step.display_text }}</p>
 
   {% if step.status == "suggested" %}
-    <div class="step-feedback" aria-label="Suggestion feedback">
-      <button
-        type="button"
-        class="icon-button {% if step.has_thumbs_up %}icon-button--active{% endif %}"
-        name="kind"
-        value="thumbs_up"
-        title="Thumbs up"
-        aria-label="Thumbs up for {{ step.title }}"
-        hx-post="/steps/{{ step.id }}/feedback"
-        hx-target="#steps-panel"
-        hx-swap="outerHTML"
-      >👍</button>
-      <button
-        type="button"
-        class="icon-button {% if step.has_thumbs_down %}icon-button--active{% endif %}"
-        name="kind"
-        value="thumbs_down"
-        title="Thumbs down"
-        aria-label="Thumbs down for {{ step.title }}"
-        hx-post="/steps/{{ step.id }}/feedback"
-        hx-target="#steps-panel"
-        hx-swap="outerHTML"
-      >👎</button>
-    </div>
-
     <div class="step-actions" aria-label="Step decision controls">
       <form
         hx-post="/steps/{{ step.id }}/accept"
@@ -52,15 +16,8 @@
         hx-target="#steps-panel"
         hx-swap="outerHTML"
       >
-        <input type="text" name="reason" placeholder="Reason optional" aria-label="Rejection reason for {{ step.title }}">
         <button class="decision-button decision-button--reject" type="submit" title="Reject step" aria-label="Reject {{ step.title }}">✕</button>
       </form>
     </div>
   {% endif %}
-
-  <div class="step-card__footer">
-    {% if step.goal %}
-      <span>{{ step.goal.title }}</span>
-    {% endif %}
-  </div>
 </article>
