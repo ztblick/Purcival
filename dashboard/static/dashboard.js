@@ -57,6 +57,7 @@ async function loadChatPanel(scopeType, scopeId) {
 
   target.outerHTML = await response.text();
   renderMarkdownMessages(document);
+  setupChatHistory(document);
 }
 
 function escapeHtml(value) {
@@ -168,10 +169,13 @@ function renderMarkdownMessages(root) {
   });
 }
 
-function createChatMessage(role, text = "") {
+function createChatMessage(role, text = "", id = null) {
   const wrapper = document.createElement("div");
   wrapper.className = `chat-message chat-message--${role}`;
   wrapper.dataset.markdownContent = text;
+  if (id !== null && id !== undefined) {
+    wrapper.dataset.messageId = id;
+  }
 
   const label = document.createElement("span");
   label.textContent = role === "user" ? "Zach" : "Jo";
@@ -182,6 +186,72 @@ function createChatMessage(role, text = "") {
   wrapper.append(label, body);
   renderMarkdownInto(wrapper, text);
   return wrapper;
+}
+
+function oldestMessageId(stack) {
+  const oldest = stack.querySelector(".chat-message[data-message-id]");
+  return oldest ? oldest.dataset.messageId : stack.dataset.oldestMessageId;
+}
+
+async function loadOlderMessages(stack) {
+  if (stack.dataset.loadingOlderMessages === "true") {
+    return;
+  }
+  if (stack.dataset.hasMoreMessages !== "true") {
+    return;
+  }
+
+  const scopeType = stack.dataset.chatScopeType;
+  const scopeId = stack.dataset.chatScopeId;
+  const beforeId = oldestMessageId(stack);
+  if (!scopeType || !scopeId || !beforeId) {
+    return;
+  }
+
+  stack.dataset.loadingOlderMessages = "true";
+  const previousHeight = stack.scrollHeight;
+
+  try {
+    const response = await fetch(
+      `/chat/${scopeType}/${scopeId}/messages?before_id=${beforeId}&limit=20`,
+    );
+    if (!response.ok) {
+      return;
+    }
+
+    const payload = await response.json();
+    const messages = payload.messages || [];
+    const firstChild = stack.firstChild;
+    for (const message of messages) {
+      stack.insertBefore(
+        createChatMessage(message.role, message.content, message.id),
+        firstChild,
+      );
+    }
+
+    stack.dataset.hasMoreMessages = payload.has_more ? "true" : "false";
+    if (messages.length) {
+      stack.dataset.oldestMessageId = messages[0].id;
+      stack.scrollTop += stack.scrollHeight - previousHeight;
+    }
+  } finally {
+    stack.dataset.loadingOlderMessages = "false";
+  }
+}
+
+function setupChatHistory(root) {
+  root.querySelectorAll(".message-stack[data-chat-history]").forEach((stack) => {
+    if (stack.dataset.chatHistoryInitialized === "true") {
+      return;
+    }
+    stack.dataset.chatHistoryInitialized = "true";
+    stack.scrollTop = stack.scrollHeight;
+    stack.addEventListener("scroll", () => {
+      if (stack.scrollTop <= 24) {
+        loadOlderMessages(stack);
+      }
+    });
+  });
 }
 
 function parseEventPayload(event) {
@@ -203,7 +273,8 @@ async function submitChatForm(form) {
   }
 
   const formData = new FormData(form);
-  stack.appendChild(createChatMessage("user", message));
+  const userMessage = createChatMessage("user", message);
+  stack.appendChild(userMessage);
   const assistantMessage = createChatMessage("assistant", "");
   stack.appendChild(assistantMessage);
   stack.scrollTop = stack.scrollHeight;
@@ -226,6 +297,12 @@ async function submitChatForm(form) {
     }
 
     const payload = await response.json();
+    if (payload.message_id) {
+      userMessage.dataset.messageId = payload.message_id;
+      if (!stack.dataset.oldestMessageId) {
+        stack.dataset.oldestMessageId = payload.message_id;
+      }
+    }
     const stream = new EventSource(`/chat/streams/${payload.stream_id}`);
     let assistantMarkdown = "";
 
@@ -236,7 +313,11 @@ async function submitChatForm(form) {
       stack.scrollTop = stack.scrollHeight;
     });
 
-    stream.addEventListener("done", () => {
+    stream.addEventListener("done", (event) => {
+      const data = parseEventPayload(event);
+      if (data.message_id) {
+        assistantMessage.dataset.messageId = data.message_id;
+      }
       stream.close();
       if (textarea) {
         textarea.disabled = false;
@@ -333,4 +414,5 @@ document.addEventListener("keydown", (event) => {
 
 document.addEventListener("DOMContentLoaded", () => {
   renderMarkdownMessages(document);
+  setupChatHistory(document);
 });

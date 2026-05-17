@@ -11,7 +11,7 @@ agent sessions. Read it in full each session. Update sections marked
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
 **Phase:** 5 — Agent loop integration: suggestion generation (ready for next development cycle)
-**Status:** Phase 4 complete. Clicking a goal or step opens a scoped Jo chat panel, messages persist with `scope_type` / `scope_id`, Markdown renders in chat bubbles, responses stream over SSE through provider-native `brain.stream()` handlers when available, and scoped summarization runs after responses. Route plus Playwright coverage verifies streaming, reload persistence, Markdown rendering, and no leakage into Jo's default chat. Full pytest passes.
+**Status:** Phase 4.1 usability polish complete. Step cards show the inherited goal category tag, focused chat history scrolls inside the chat panel with the composer pinned below it, and older scoped messages load lazily as Zach scrolls upward. Phase 5 remains the next substantive development phase.
 
 ---
 
@@ -95,7 +95,7 @@ Acceptance: Zach reviews the screenshot and approves the visual identity.
 
 **Phase 3 — Goal and step display, accept/reject**
 
-Real data renders from the database. Category tags display on goals, while step cards stay minimal. Steps in `status='suggested'` show ✓ and ✗ buttons. ✓ transitions to `accepted`. ✗ transitions to `rejected` without asking for a reason. Accepted steps display alongside open suggestions, visually distinct but without extra status metadata. HTMX endpoints handle state transitions; full page never reloads.
+Real data renders from the database. Category tags display on goals, and Phase 4.1 adds inherited category tags to step cards. Steps in `status='suggested'` show ✓ and ✗ buttons. ✓ transitions to `accepted`. ✗ transitions to `rejected` without asking for a reason. Accepted steps display alongside open suggestions, visually distinct but without extra status metadata. HTMX endpoints handle state transitions; full page never reloads.
 
 Acceptance: end-to-end Playwright test of the accept/reject flow. Screenshot updated.
 
@@ -110,6 +110,19 @@ Acceptance met: Playwright test sends a message, verifies SSE response delivery,
 Register `GoalTool` (observe-tier; surfaces active goals via `get_context()`) and `SuggestionTool` (observe-tier methods: `propose_suggestion`, `list_suggestions`, `update_status`). Planning-cycle prompt updated to include current goals and recently-accepted/rejected suggestions, with explicit instruction to propose 1–3 new candidate suggestions tied to specific goals each planning cycle. Suggestions land in `steps` with `status='suggested'` and `source='agent_planning'`.
 
 Acceptance: a real planning cycle produces sensible suggestions visible on the dashboard within seconds.
+
+**Phase 5 adjunct TODOs - dashboard usability**
+
+- Step cards now display their inherited goal category as a compact tag.
+- Chat history now scrolls inside the focused chat panel and lazily loads older
+  scoped messages when Zach scrolls upward.
+- Defer clickable step-category reassignment until after Phase 5 unless it
+  becomes a blocker; it changes more than presentation because categories
+  currently belong to goals, not steps.
+- Design step-level categories before implementation. The design should decide
+  whether changing a step category moves the step to another goal, adds an
+  independent step category field, introduces a categories table, or supports a
+  many-to-many step/category join table for multiple categories.
 
 **Phase 6 — Accountability**
 
@@ -135,7 +148,7 @@ answer in the design doc, Zach reviews.)
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-(None pending. Phase 4 is complete; Phase 5 is ready for the next development cycle.)
+(None pending. Phase 4.1 is complete; Phase 5 is ready for the next development cycle.)
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -150,6 +163,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-17 - Goals dashboard usability polish - added inherited category tags to step cards, pinned the chat composer while history scrolls inside the panel, added scoped message pagination for lazy upward loading, and documented step-category editing as design-gated - committed.
 - 2026-05-17 — Goals dashboard Markdown and streaming — added dependency-free Markdown rendering for scoped chat messages, provider-native `brain.stream()` handlers for ChatGPT, Claude, and Ollama with fallback, per-chunk SSE delivery, and regression coverage — committed.
 - 2026-05-17 — Goals dashboard chat composer fix — fixed keyboard activation so Space/Enter inside the chat textarea no longer reloads the scoped panel, and added Playwright regression coverage for messages with spaces — committed.
 - 2026-05-17 — Goals dashboard Phase 4 — implemented scoped goal/step chat panel loading, message persistence, SSE response delivery via `brain.stream()`, scoped context assembly, and Playwright coverage for streaming, reload persistence, and default-chat isolation — committed.
@@ -194,6 +208,7 @@ Append entries; never edit prior ones.
 - **2026-05-17 — Live integration tests are opt-in during dashboard design.** OpenAI, Google Calendar, and live Ollama summarization tests are skipped by default under pytest. Run them with `PURCIVAL_RUN_LIVE_TESTS=1` plus the relevant API keys, credentials, or local services. This keeps dashboard data/UI work from being blocked by secondary integrations.
 - **2026-05-17 — Goals dashboard is chat-first.** Zach clarified that chatting with Jo is the main way goals, suggestions, and steps should change. Dashboard goal/step controls should stay limited; manual editing is not the product center.
 - **2026-05-17 — Goals dashboard feedback is accept/reject only.** Zach clarified that ✓ means the suggestion was good enough to accept, ✕ means it was bad enough to reject, and Jo should infer why from context rather than asking for thumbs or rejection reasons.
+- **2026-05-17 - Step category editing is design-gated.** Step cards may display the inherited goal category immediately, but changing a step's category or assigning multiple categories affects the current `category -> goal -> step` model and needs a design update before production code.
 
 ---
 
@@ -211,6 +226,8 @@ Append entries; never edit prior ones.
 - **Web search tool** for the agent — would unlock proactive suggestions like "Yoga6 has a 6pm class today, want me to put it on your calendar?" Needs its own design phase: generic URL fetch + extraction vs. search engine API vs. browser automation; rate limiting; caching; cost; trust boundary for arbitrary URL fetching.
 - **AI-proposed goals.** Right now goals are user-created. Purcival proposing goals from observed conversation patterns is a future feature; moves the trust boundary, defer.
 - **Recurring steps.** Currently all steps are one-shot. Recurring goals produce fresh steps per planning cycle.
+- **Editable step categories.** Step cards can show the inherited goal category, but a clickable category menu needs a design pass because steps currently inherit category through their parent goal.
+- **Multiple categories per step.** Likely requires a `categories` table plus a step/category join table or another explicit category ownership decision; do not bolt this onto `steps.goal_id`.
 
 ### Other deferred work
 

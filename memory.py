@@ -510,6 +510,47 @@ class PersonaMemory:
         finally:
             conn.close()
 
+    def get_messages_before(
+        self,
+        before_id: int,
+        limit: int = 20,
+        scope: MessageScope | None = None,
+    ) -> list[dict]:
+        """
+        Get messages before a known message id, ordered oldest-first.
+
+        Dashboard chat uses this to load older history when Zach scrolls up.
+        The scope filter matches get_recent_messages so scoped threads remain
+        isolated.
+        """
+        resolved_scope = self._normalize_scope(scope)
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, role, content, scope_type, scope_id, created_at
+                FROM messages
+                WHERE id < ?
+                  AND scope_type = ?
+                  AND (
+                      (? IS NULL AND scope_id IS NULL)
+                      OR scope_id = ?
+                  )
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (
+                    before_id,
+                    resolved_scope.scope_type,
+                    resolved_scope.scope_id,
+                    resolved_scope.scope_id,
+                    limit,
+                ),
+            ).fetchall()
+            return [dict(row) for row in reversed(rows)]
+        finally:
+            conn.close()
+
     def get_message_count(self, scope: MessageScope | None = None) -> int:
         """Return total number of messages stored for a scope."""
         resolved_scope = self._normalize_scope(scope)

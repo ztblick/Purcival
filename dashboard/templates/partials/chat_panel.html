@@ -28,7 +28,20 @@
     {% endif %}
   </div>
 
-  <div class="message-stack" aria-live="polite" aria-label="Chat messages">
+  <div
+    class="message-stack"
+    aria-live="polite"
+    aria-label="Chat messages"
+    {% if chat_context %}
+      data-chat-history
+      data-chat-scope-type="{{ chat_context.scope_type }}"
+      data-chat-scope-id="{{ chat_context.scope_id }}"
+      data-has-more-messages="{{ 'true' if has_more_messages else 'false' }}"
+      {% if chat_messages %}
+        data-oldest-message-id="{{ chat_messages[0].id }}"
+      {% endif %}
+    {% endif %}
+  >
     {% if chat_messages %}
       {% for message in chat_messages %}
         {% include "partials/chat_message.html" %}

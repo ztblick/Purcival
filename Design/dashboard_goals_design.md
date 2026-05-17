@@ -1,6 +1,6 @@
 # Goals Dashboard Design
 
-**Status:** Phase 4 complete; Phase 5 ready for next development cycle
+**Status:** Phase 4.1 dashboard usability polish complete; Phase 5 ready for next development cycle
 **Date:** 2026-05-17
 **Phase:** 4 - Chat-on-step and chat-on-goal
 **Scope:** shared goal state, scoped conversations, dashboard UI, and agent integration
@@ -26,6 +26,7 @@ Out of scope for v1:
 - AI-proposed goals.
 - Web search.
 - Recurring steps.
+- Step-level or multi-category assignment.
 - Direct external execution beyond the existing tool tiers.
 
 ---
@@ -676,6 +677,11 @@ POST /chat/{scope_type}/{scope_id}/messages
 GET  /chat/streams/{stream_id}
 ```
 
+`GET /chat/{scope_type}/{scope_id}/messages` returns the newest messages by
+default and supports `before_id` for loading older scoped history. The chat
+panel should initially render only the latest page and prepend older messages
+as Zach scrolls up.
+
 Why a `stream_id`:
 
 - Browser `EventSource` is GET-only.
@@ -773,6 +779,7 @@ Layout:
 - Main work area: large focused Jo chat.
 - Secondary rail: suggested and accepted steps as context.
 - Goal and step cards use stable category accent colors.
+- Step cards show the inherited goal category as a compact tag.
 - Dashboard title changes once per calendar day, not on a timer.
 - The title and goal rail are merged to preserve vertical space for chat.
 - Goal cards are compact and do not surface step details or step counts.
@@ -797,8 +804,11 @@ complete: clicking a goal or step loads a scoped Jo chat panel, messages persist
 to Jo's existing memory database with the matching scope, Markdown renders in
 chat bubbles, responses are delivered over SSE through provider-native
 `brain.stream()` handlers when available, and Playwright verifies streaming,
-reload persistence, Markdown rendering, and default-chat isolation. Phase 5
-should begin in the next development cycle.
+reload persistence, Markdown rendering, and default-chat isolation. Phase 4.1
+kept the chat composer pinned while chat history scrolls inside the panel,
+loads older scoped messages lazily as Zach scrolls up, and shows inherited
+goal categories on step cards. Phase 5 should begin in the next development
+cycle.
 
 ---
 
@@ -877,6 +887,28 @@ Acceptance met:
 - Response streams back.
 - Message persists in scoped history.
 - Jo default chat remains untouched.
+
+### Phase 4.1 - Dashboard usability polish
+
+Implemented:
+
+- Step cards display the inherited goal category as a tag.
+- Scoped chat history scrolls inside the chat panel instead of extending the
+  whole window.
+- Chat panels initially load the latest message page and fetch older scoped
+  messages as Zach scrolls upward.
+
+Deferred:
+
+- Clicking a step category tag to change category.
+- New category creation from the tag menu.
+- Multiple categories per step.
+
+Reason:
+
+- Current data model is `category -> goal -> step`; steps do not own category
+  state. Editable or multiple step categories need a design update and schema
+  decision before implementation.
 
 ### Phase 5 - Agent suggestion generation
 

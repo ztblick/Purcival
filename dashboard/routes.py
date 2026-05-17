@@ -27,6 +27,7 @@ from summarizer import check_and_summarize
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 DASHBOARD_PERSONA = "jo"
+CHAT_MESSAGE_PAGE_SIZE = 20
 
 router = APIRouter()
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
@@ -101,6 +102,7 @@ def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
         "active_context": active_context,
         "chat_context": chat_context,
         "chat_messages": [],
+        "has_more_messages": False,
         "initial_title": title_for_date(),
     }
 
@@ -120,6 +122,7 @@ def build_step_cards(
         cards.append({
             **step,
             "goal": goal,
+            "category": goal["category"],
             "category_class": category_class(goal["category"]),
             "display_text": step["title"],
             "scope_type": "step",
@@ -175,10 +178,16 @@ def build_chat_panel_model(
     scope: MessageScope,
 ) -> dict[str, Any]:
     memory = get_memory()
+    chat_messages = memory.get_recent_messages(
+        limit=CHAT_MESSAGE_PAGE_SIZE,
+        scope=scope,
+    )
+    total_messages = memory.get_message_count(scope=scope)
     return {
         "request": request,
         "chat_context": chat_context_from_scope(store, scope),
-        "chat_messages": memory.get_recent_messages(limit=50, scope=scope),
+        "chat_messages": chat_messages,
+        "has_more_messages": total_messages > len(chat_messages),
     }
 
 
@@ -397,11 +406,32 @@ def scoped_chat_panel(scope_type: str, scope_id: int, request: Request):
 
 
 @router.get("/chat/{scope_type}/{scope_id}/messages")
-def scoped_chat_messages(scope_type: str, scope_id: int):
+def scoped_chat_messages(
+    scope_type: str,
+    scope_id: int,
+    before_id: int | None = None,
+    limit: int = CHAT_MESSAGE_PAGE_SIZE,
+):
     store = get_store()
     scope = parse_chat_scope(store, scope_type, scope_id)
-    messages = get_memory().get_recent_messages(limit=50, scope=scope)
-    return {"messages": messages}
+    page_size = min(max(limit, 1), 50)
+    memory = get_memory()
+    if before_id is None:
+        messages = memory.get_recent_messages(limit=page_size, scope=scope)
+        return {
+            "messages": messages,
+            "has_more": memory.get_message_count(scope=scope) > len(messages),
+        }
+
+    older_messages = memory.get_messages_before(
+        before_id=before_id,
+        limit=page_size + 1,
+        scope=scope,
+    )
+    has_more = len(older_messages) > page_size
+    if has_more:
+        older_messages = older_messages[1:]
+    return {"messages": older_messages, "has_more": has_more}
 
 
 @router.post("/chat/{scope_type}/{scope_id}/messages")
@@ -416,11 +446,11 @@ def create_chat_message(
 
     store = get_store()
     scope = parse_chat_scope(store, scope_type, scope_id)
-    get_memory().add_message("user", cleaned, scope=scope)
+    user_message_id = get_memory().add_message("user", cleaned, scope=scope)
 
     stream_id = uuid.uuid4().hex
     _STREAM_JOBS[stream_id] = ChatStreamJob(scope=scope)
-    return {"stream_id": stream_id}
+    return {"stream_id": stream_id, "message_id": user_message_id}
 
 
 @router.post("/steps/{step_id}/accept")

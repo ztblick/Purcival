@@ -64,6 +64,7 @@ def test_dashboard_partials_render(tmp_path, monkeypatch):
     assert "Go to Yoga6 in Palo Alto at 12pm" not in goals_response.text
     assert "Go to Yoga6 in Palo Alto at 12pm" in suggestions_response.text
     assert "category-home" in suggestions_response.text
+    assert "health" in suggestions_response.text
     assert "Focused Chat" in chat_response.text
 
 
@@ -91,6 +92,44 @@ def test_scoped_chat_panel_loads_step_history(tmp_path, monkeypatch):
     assert "Go to Yoga6 in Palo Alto at 12pm" in response.text
     assert "Can we make this fit after school?" in response.text
     assert "Let&#39;s narrow the time window." in response.text
+    assert 'data-chat-history' in response.text
+    assert 'data-message-id=' in response.text
+
+
+def test_scoped_chat_messages_can_page_older_history(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
+    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+
+    step = next(
+        row for row in store.list_steps(status="suggested")
+        if row["title"] == "Go to Yoga6 in Palo Alto at 12pm"
+    )
+    scope = MessageScope.step(step["id"])
+    mem = PersonaMemory("jo")
+    for index in range(25):
+        mem.add_message("user", f"Scoped message {index}", scope=scope)
+
+    client = TestClient(app)
+    recent_response = client.get(f"/chat/step/{step['id']}/messages?limit=20")
+    assert recent_response.status_code == 200
+    recent_payload = recent_response.json()
+    assert len(recent_payload["messages"]) == 20
+    assert recent_payload["has_more"] is True
+    assert recent_payload["messages"][0]["content"] == "Scoped message 5"
+
+    before_id = recent_payload["messages"][0]["id"]
+    older_response = client.get(
+        f"/chat/step/{step['id']}/messages?before_id={before_id}&limit=20"
+    )
+    assert older_response.status_code == 200
+    older_payload = older_response.json()
+    assert len(older_payload["messages"]) == 5
+    assert older_payload["has_more"] is False
+    assert older_payload["messages"][0]["content"] == "Scoped message 0"
+    assert older_payload["messages"][-1]["content"] == "Scoped message 4"
 
 
 def test_scoped_chat_panel_loads_goal_history(tmp_path, monkeypatch):
@@ -369,6 +408,7 @@ def test_playwright_scoped_chat_flow(tmp_path, monkeypatch):
                     "data-chat-scope-id",
                     str(step["id"]),
                 )
+                expect(page.locator(".message-stack")).to_have_css("overflow-y", "auto")
                 textarea = page.locator('textarea[name="message"]')
                 textarea.fill("Can")
                 page.keyboard.press("Space")

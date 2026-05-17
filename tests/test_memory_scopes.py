@@ -43,6 +43,27 @@ def test_scoped_messages_do_not_leak_into_default(scoped_memory):
     assert scoped_memory.get_message_count(step_scope) == 1
 
 
+def test_get_messages_before_respects_scope(scoped_memory):
+    step_scope = MessageScope.step(7)
+    for index in range(5):
+        scoped_memory.add_message("user", f"Default {index}")
+        scoped_memory.add_message("user", f"Scoped {index}", step_scope)
+
+    recent = scoped_memory.get_recent_messages(limit=3, scope=step_scope)
+    older = scoped_memory.get_messages_before(
+        before_id=recent[0]["id"],
+        limit=2,
+        scope=step_scope,
+    )
+
+    assert [row["content"] for row in recent] == [
+        "Scoped 2",
+        "Scoped 3",
+        "Scoped 4",
+    ]
+    assert [row["content"] for row in older] == ["Scoped 0", "Scoped 1"]
+
+
 def test_scoped_summarization_cursor_is_independent(scoped_memory):
     step_scope = MessageScope.step(4)
 

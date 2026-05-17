@@ -6,6 +6,9 @@
   role="button"
   tabindex="0"
 >
+  <div class="step-card__meta">
+    <span class="card-tag card-tag--small">{{ step.category }}</span>
+  </div>
   <p class="step-card__text">{{ step.display_text }}</p>
 
   {% if step.status == "suggested" %}
