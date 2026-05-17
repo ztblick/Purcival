@@ -11,7 +11,7 @@ agent sessions. Read it in full each session. Update sections marked
 **Last updated:** 2026-05-17
 **Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
 **Phase:** 5 — Agent loop integration: suggestion generation (ready for next development cycle)
-**Status:** Phase 4.1 usability polish complete. Step cards show the inherited goal category tag, focused chat history scrolls inside the chat panel with the composer pinned below it, and older scoped messages load lazily as Zach scrolls upward. Phase 5 remains the next substantive development phase.
+**Status:** Phase 4.2 layout polish complete. Step cards show the inherited goal category tag, focused chat history scrolls inside the chat panel, older scoped messages load lazily as Zach scrolls upward, and the scoped goal/step context now sits directly beside the bottom text input so more recent messages fit onscreen. Phase 5 remains the next substantive development phase.
 
 ---
 
@@ -116,6 +116,8 @@ Acceptance: a real planning cycle produces sensible suggestions visible on the d
 - Step cards now display their inherited goal category as a compact tag.
 - Chat history now scrolls inside the focused chat panel and lazily loads older
   scoped messages when Zach scrolls upward.
+- The scoped goal/step context now sits directly beside the bottom text input,
+  roughly 25% context and 75% input row, to reclaim vertical chat space.
 - Defer clickable step-category reassignment until after Phase 5 unless it
   becomes a blocker; it changes more than presentation because categories
   currently belong to goals, not steps.
@@ -163,6 +165,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-17 - Goals dashboard bottom input polish - moved the scoped goal/step context directly beside the bottom text input at roughly 25/75 width so the chat history can show more messages - committed.
 - 2026-05-17 - Goals dashboard usability polish - added inherited category tags to step cards, pinned the chat composer while history scrolls inside the panel, added scoped message pagination for lazy upward loading, and documented step-category editing as design-gated - committed.
 - 2026-05-17 — Goals dashboard Markdown and streaming — added dependency-free Markdown rendering for scoped chat messages, provider-native `brain.stream()` handlers for ChatGPT, Claude, and Ollama with fallback, per-chunk SSE delivery, and regression coverage — committed.
 - 2026-05-17 — Goals dashboard chat composer fix — fixed keyboard activation so Space/Enter inside the chat textarea no longer reloads the scoped panel, and added Playwright regression coverage for messages with spaces — committed.

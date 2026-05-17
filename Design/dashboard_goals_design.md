@@ -1,6 +1,6 @@
 # Goals Dashboard Design
 
-**Status:** Phase 4.1 dashboard usability polish complete; Phase 5 ready for next development cycle
+**Status:** Phase 4.2 dashboard layout polish complete; Phase 5 ready for next development cycle
 **Date:** 2026-05-17
 **Phase:** 4 - Chat-on-step and chat-on-goal
 **Scope:** shared goal state, scoped conversations, dashboard UI, and agent integration
@@ -783,6 +783,9 @@ Layout:
 - Dashboard title changes once per calendar day, not on a timer.
 - The title and goal rail are merged to preserve vertical space for chat.
 - Goal cards are compact and do not surface step details or step counts.
+- The focused chat panel keeps the chat history as the dominant region; the
+  scoped goal/step context lives directly beside the bottom text input at
+  roughly 25% width, with the input row taking the remaining space.
 - Step cards are larger than goal cards and show only one compact suggestion
   text, not title/subtitle metadata; full context belongs in the focused Jo chat.
 - Mobile: stack strips vertically and turn chat into a full-width drawer.
@@ -807,8 +810,10 @@ chat bubbles, responses are delivered over SSE through provider-native
 reload persistence, Markdown rendering, and default-chat isolation. Phase 4.1
 kept the chat composer pinned while chat history scrolls inside the panel,
 loads older scoped messages lazily as Zach scrolls up, and shows inherited
-goal categories on step cards. Phase 5 should begin in the next development
-cycle.
+goal categories on step cards. Phase 4.2 moved the scoped goal/step context
+directly beside the bottom text input so the chat history gets more vertical
+space.
+Phase 5 should begin in the next development cycle.
 
 ---
 
@@ -897,6 +902,8 @@ Implemented:
   whole window.
 - Chat panels initially load the latest message page and fetch older scoped
   messages as Zach scrolls upward.
+- The scoped goal/step context card is incorporated directly beside the bottom
+  text input at roughly 25% width, with the input row taking the remaining width.
 
 Deferred:
 

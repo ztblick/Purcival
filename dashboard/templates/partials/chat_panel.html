@@ -16,18 +16,6 @@
     {% endif %}
   </div>
 
-  <div class="context-card {% if chat_context %}{{ chat_context.category_class }}{% endif %}">
-    {% if chat_context %}
-      <span class="card-tag card-tag--small">{{ chat_context.tag }}</span>
-      <h3>{{ chat_context.heading }}</h3>
-      <p>{{ chat_context.body }}</p>
-    {% else %}
-      <span class="card-tag card-tag--small">default</span>
-      <h3>Choose a goal or step</h3>
-      <p>Jo will keep the conversation scoped to that context.</p>
-    {% endif %}
-  </div>
-
   <div
     class="message-stack"
     aria-live="polite"
@@ -54,16 +42,32 @@
     {% endif %}
   </div>
 
-  <form
-    class="composer"
-    aria-label="Chat composer"
-    {% if chat_context %}
-      data-chat-form
-      action="/chat/{{ chat_context.scope_type }}/{{ chat_context.scope_id }}/messages"
-    {% endif %}
-  >
-    <label for="chat-message">Message Jo</label>
-    <textarea id="chat-message" name="message" rows="4" {% if not chat_context %}disabled{% endif %}></textarea>
-    <button type="submit" {% if not chat_context %}disabled{% endif %}>Send</button>
-  </form>
+  <div class="chat-dock">
+    <div class="context-card context-card--dock {% if chat_context %}{{ chat_context.category_class }}{% endif %}">
+      {% if chat_context %}
+        <span class="card-tag card-tag--small">{{ chat_context.tag }}</span>
+        <h3>{{ chat_context.heading }}</h3>
+        <p>{{ chat_context.body }}</p>
+      {% else %}
+        <span class="card-tag card-tag--small">default</span>
+        <h3>Choose a goal or step</h3>
+        <p>Jo will keep the conversation scoped to that context.</p>
+      {% endif %}
+    </div>
+
+    <form
+      class="composer"
+      aria-label="Chat composer"
+      {% if chat_context %}
+        data-chat-form
+        action="/chat/{{ chat_context.scope_type }}/{{ chat_context.scope_id }}/messages"
+      {% endif %}
+    >
+      <label for="chat-message">Message Jo</label>
+      <div class="composer__input-row">
+        <textarea id="chat-message" name="message" rows="3" {% if not chat_context %}disabled{% endif %}></textarea>
+        <button type="submit" {% if not chat_context %}disabled{% endif %}>Send</button>
+      </div>
+    </form>
+  </div>
 </section>

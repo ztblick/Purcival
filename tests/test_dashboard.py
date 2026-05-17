@@ -94,6 +94,9 @@ def test_scoped_chat_panel_loads_step_history(tmp_path, monkeypatch):
     assert "Let&#39;s narrow the time window." in response.text
     assert 'data-chat-history' in response.text
     assert 'data-message-id=' in response.text
+    assert 'class="chat-dock"' in response.text
+    assert 'class="composer__input-row"' in response.text
+    assert response.text.index('class="message-stack"') < response.text.index('class="chat-dock"')
 
 
 def test_scoped_chat_messages_can_page_older_history(tmp_path, monkeypatch):
@@ -409,6 +412,8 @@ def test_playwright_scoped_chat_flow(tmp_path, monkeypatch):
                     str(step["id"]),
                 )
                 expect(page.locator(".message-stack")).to_have_css("overflow-y", "auto")
+                expect(page.locator(".chat-dock")).to_have_css("display", "grid")
+                expect(page.locator(".composer__input-row")).to_have_css("display", "grid")
                 textarea = page.locator('textarea[name="message"]')
                 textarea.fill("Can")
                 page.keyboard.press("Space")

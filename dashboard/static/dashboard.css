@@ -404,7 +404,40 @@ h3 {
 }
 
 .context-card {
-  min-height: 120px;
+  min-height: 0;
+}
+
+.chat-dock {
+  display: grid;
+  flex-shrink: 0;
+  grid-template-columns: minmax(180px, 1fr) minmax(0, 3fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.context-card--dock {
+  gap: 8px;
+  justify-content: start;
+  overflow: hidden;
+  padding: 12px;
+}
+
+.context-card--dock h3 {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 0.94rem;
+  line-height: 1.18;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.context-card--dock p {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .category-career {
@@ -519,13 +552,30 @@ h3 {
 
 .composer {
   display: grid;
-  flex-shrink: 0;
+  align-self: stretch;
+  min-width: 0;
+}
+
+.composer label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.composer__input-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
+  align-items: stretch;
 }
 
 .composer textarea {
   width: 100%;
-  min-height: 132px;
+  min-height: 92px;
   resize: vertical;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -535,8 +585,8 @@ h3 {
 }
 
 .composer button {
-  justify-self: end;
-  min-width: 90px;
+  min-width: 76px;
+  border-radius: var(--radius);
 }
 
 .composer button:not(:disabled) {
@@ -561,6 +611,14 @@ h3 {
     order: -1;
     max-height: calc(100vh - 24px);
     min-height: 620px;
+  }
+
+  .chat-dock {
+    grid-template-columns: 1fr;
+  }
+
+  .context-card--dock {
+    min-height: 0;
   }
 
   .step-grid {
