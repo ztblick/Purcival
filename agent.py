@@ -204,11 +204,14 @@ def _build_agent_prompt(
             "suggestions tied to specific existing goals. At most 3 new "
             "suggestions in this cycle; fewer is better than noise, and zero "
             "is acceptable when nothing is worth adding.\n\n"
-            "Use suggestions.propose_suggestion for candidate steps. Do not "
-            "propose new goals. Do not use web search or external facts you "
-            "do not already have. Prefer small, checkable steps Zach can "
-            "accept or reject. Avoid duplicates of existing suggested, "
-            "accepted, completed, or recently rejected steps."
+            "Use opportunities.propose_goal_step for candidate steps so the "
+            "opportunity is recorded before any dashboard suggestion is "
+            "delivered. Do not call suggestions.propose_suggestion directly "
+            "during planning unless you are repairing a previously recorded "
+            "opportunity. Do not propose new goals. Do not use web search or "
+            "external facts you do not already have. Prefer small, checkable "
+            "steps Zach can accept or reject. Avoid duplicates of existing "
+            "suggested, accepted, completed, or recently rejected steps."
         )
     else:
         sections.append(
@@ -360,10 +363,11 @@ def _record_tool_observation_events(
     job_id: int,
     job_type: str,
     tool_contexts: dict[str, str],
-):
+) -> list[int]:
     """Persist tool observations before reasoning so failures do not lose them."""
+    event_ids = []
     for tool_name, context in tool_contexts.items():
-        memory.add_agent_event(
+        event_id = memory.add_agent_event(
             event_type="tool_observation",
             source=tool_name,
             source_id=cycle_id,
@@ -375,6 +379,8 @@ def _record_tool_observation_events(
                 "content": context,
             },
         )
+        event_ids.append(event_id)
+    return event_ids
 
 
 # --- The Agent Cycle ---
@@ -456,7 +462,7 @@ async def run_agent_cycle(
                     logger.error(f"Tool '{name}' get_context() failed: {e}")
 
     _cache_tool_contexts(memory, tool_contexts)
-    _record_tool_observation_events(
+    observation_event_ids = _record_tool_observation_events(
         memory=memory,
         cycle_id=cycle_id,
         trigger_id=trigger_id,
@@ -464,6 +470,9 @@ async def run_agent_cycle(
         job_type=job_type,
         tool_contexts=tool_contexts,
     )
+    opportunity_tool = tools.get("opportunities")
+    if hasattr(opportunity_tool, "set_evidence_event_ids"):
+        opportunity_tool.set_evidence_event_ids(observation_event_ids)
 
     if "schedule" in tools:
         schedule_plan = tools["schedule"].get_context()
@@ -558,7 +567,8 @@ async def run_agent_cycle(
     # --- Step 5: Validate + Act (unified for ALL tools including schedule) ---
     actions_taken = []
 
-    for action in parsed_actions:
+    for raw_action in parsed_actions:
+        action = _route_planning_action(raw_action, is_planning, tools)
         valid, reason = _validate_action(action, tools, actions_today, max_actions)
 
         if valid:
@@ -735,6 +745,39 @@ def _get_method_tier(tool: Tool | None, method_name: str) -> str:
         if method.name == method_name:
             return method.tier
     return "unknown"
+
+
+def _route_planning_action(
+    action: dict,
+    is_planning: bool,
+    tools: dict[str, Tool],
+) -> dict:
+    """
+    Route legacy direct step suggestions through the opportunity queue.
+
+    Phase C keeps SuggestionTool available for compatibility, but planning
+    cycles should record the opportunity before dashboard delivery.
+    """
+    if not is_planning:
+        return action
+    if "opportunities" not in tools:
+        return action
+    if action.get("tool") != "suggestions":
+        return action
+    if action.get("method") != "propose_suggestion":
+        return action
+
+    parameters = action.get("parameters", {})
+    if not isinstance(parameters, dict):
+        parameters = {}
+    routed_parameters = dict(parameters)
+    if not routed_parameters.get("rationale"):
+        routed_parameters["rationale"] = "Planning cycle candidate step."
+    return {
+        "tool": "opportunities",
+        "method": "propose_goal_step",
+        "parameters": routed_parameters,
+    }
 
 
 def _ensure_future_plan(

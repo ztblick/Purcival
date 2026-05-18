@@ -1,7 +1,7 @@
 # Core Agent Reliability Redesign
 
-**Status:** Phase B event/job slice implemented
-**Date:** 2026-05-17
+**Status:** Phase C opportunity queue slice implemented
+**Date:** 2026-05-18
 **Scope:** reasoning, scheduling, action selection, learning, security, and proactive delivery
 
 ---
@@ -689,6 +689,30 @@ Acceptance:
 - Jo can notice a possible step, store it as an opportunity, and only then
   deliver it as a suggested step.
 - Rejected/dismissed opportunities suppress similar repeats.
+
+Implementation notes:
+
+- Phase C keeps opportunities in each persona's `memory.db`, matching the
+  Phase B placement for events and explicit jobs. Shared/user-level
+  opportunities can still be added later if cross-persona planning needs them.
+- `agent_opportunities` stores kind, title, rationale, evidence-event ids,
+  optional goal/step links, status, urgency/impact/confidence/attention scores,
+  risk level, proposed action JSON, duplicate key, and delivery/expiry times.
+- A new `OpportunityTool` is registered as `opportunities`. Its first write
+  path is `opportunities.propose_goal_step`, which records a
+  `suggest_goal_step` opportunity before delivering a low-risk dashboard
+  suggestion into the shared steps table.
+- Planning prompts now steer Jo toward `opportunities.propose_goal_step`.
+  Planning-cycle calls to the legacy `suggestions.propose_suggestion` method
+  are routed through the opportunity tool when it is available, so old model
+  behavior still follows the Phase C path.
+- Duplicate suppression uses a deterministic duplicate key for goal-linked
+  step opportunities. Existing delivered opportunities are updated rather than
+  duplicated, and dismissed/rejected/blocked opportunities suppress similar
+  repeats.
+- Delivered opportunities write an `opportunity_delivered` event and retain the
+  delivered `step_id`, giving the dashboard suggestion a durable opportunity
+  backing before the future inbox/receipt UI exists.
 
 ### Phase D - Accountability on the new path
 

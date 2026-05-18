@@ -6,6 +6,7 @@ import logging
 from tools.base import Tool
 from goals import SharedGoalStore
 from tools.goal_tools import GoalTool, SuggestionTool
+from tools.opportunity_tool import OpportunityTool
 from tools.schedule_tool import ScheduleTool
 from tools.telegram_tool import TelegramTool
 from memory import PersonaMemory
@@ -22,6 +23,11 @@ def create_tools(
     tools["schedule"] = ScheduleTool(memory)
     store = goal_store or SharedGoalStore()
     tools["goals"] = GoalTool(store)
+    tools["opportunities"] = OpportunityTool(
+        memory,
+        store,
+        created_by_persona=memory.persona_name,
+    )
     tools["suggestions"] = SuggestionTool(
         store,
         created_by_persona=memory.persona_name,

@@ -49,6 +49,28 @@ from datetime import datetime, timedelta
 DATA_DIR = Path(__file__).parent / "data"
 logger = logging.getLogger(__name__)
 
+AGENT_OPPORTUNITY_STATUSES = {
+    "candidate",
+    "queued",
+    "scheduled",
+    "delivered",
+    "accepted",
+    "completed",
+    "rejected",
+    "dismissed",
+    "expired",
+    "blocked",
+}
+
+AGENT_OPPORTUNITY_RISK_LEVELS = {"low", "medium", "high"}
+
+AGENT_OPPORTUNITY_SUPPRESSION_STATUSES = {
+    "rejected",
+    "dismissed",
+    "expired",
+    "blocked",
+}
+
 
 def _truncate_log_value(value: str | None, limit: int = 240) -> str | None:
     if value is None or len(value) <= limit:
@@ -317,6 +339,35 @@ class PersonaMemory:
                     completed_at        TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS agent_opportunities (
+                    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind                 TEXT NOT NULL,
+                    title                TEXT NOT NULL,
+                    rationale            TEXT NOT NULL,
+                    evidence_event_ids   TEXT NOT NULL DEFAULT '[]',
+                    goal_id              INTEGER,
+                    step_id              INTEGER,
+                    status               TEXT NOT NULL,
+                    urgency              INTEGER NOT NULL,
+                    impact               INTEGER NOT NULL,
+                    confidence           INTEGER NOT NULL,
+                    attention_cost       INTEGER NOT NULL,
+                    risk_level           TEXT NOT NULL,
+                    proposed_action_json TEXT,
+                    duplicate_key        TEXT NOT NULL,
+                    deliver_after        TIMESTAMP,
+                    expires_at           TIMESTAMP,
+                    created_at           TIMESTAMP NOT NULL,
+                    updated_at           TIMESTAMP NOT NULL,
+
+                    CHECK (status IN (
+                        'candidate', 'queued', 'scheduled', 'delivered',
+                        'accepted', 'completed', 'rejected', 'dismissed',
+                        'expired', 'blocked'
+                    )),
+                    CHECK (risk_level IN ('low', 'medium', 'high'))
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_messages_created
                     ON messages(created_at);
 
@@ -346,6 +397,15 @@ class PersonaMemory:
 
                 CREATE INDEX IF NOT EXISTS idx_agent_jobs_trigger
                     ON agent_jobs(trigger_id);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_opportunities_status
+                    ON agent_opportunities(status, updated_at);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_opportunities_duplicate
+                    ON agent_opportunities(duplicate_key, status);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_opportunities_goal
+                    ON agent_opportunities(goal_id, status);
             """)
             conn.commit()
         finally:
@@ -1744,6 +1804,264 @@ class PersonaMemory:
             payload={"error": error, "status": status, "retryable": retryable},
         )
         return status
+
+    # --- Agent Opportunities ---
+
+    def add_agent_opportunity(
+        self,
+        kind: str,
+        title: str,
+        rationale: str,
+        evidence_event_ids: list[int] | None = None,
+        goal_id: int | None = None,
+        step_id: int | None = None,
+        status: str = "candidate",
+        urgency: int = 3,
+        impact: int = 3,
+        confidence: int = 3,
+        attention_cost: int = 2,
+        risk_level: str = "low",
+        proposed_action: dict | list | None = None,
+        duplicate_key: str | None = None,
+        deliver_after: str | None = None,
+        expires_at: str | None = None,
+    ) -> int:
+        """Create a durable candidate opportunity for later policy/delivery."""
+        self._validate_opportunity_status(status)
+        self._validate_opportunity_risk(risk_level)
+        scores = {
+            "urgency": self._validate_opportunity_score(urgency, "urgency"),
+            "impact": self._validate_opportunity_score(impact, "impact"),
+            "confidence": self._validate_opportunity_score(confidence, "confidence"),
+            "attention_cost": self._validate_opportunity_score(
+                attention_cost,
+                "attention_cost",
+            ),
+        }
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        duplicate = duplicate_key or self._default_opportunity_duplicate_key(
+            kind,
+            title,
+            goal_id,
+            step_id,
+        )
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO agent_opportunities
+                    (kind, title, rationale, evidence_event_ids, goal_id,
+                     step_id, status, urgency, impact, confidence,
+                     attention_cost, risk_level, proposed_action_json,
+                     duplicate_key, deliver_after, expires_at, created_at,
+                     updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    kind,
+                    title,
+                    rationale,
+                    json.dumps(evidence_event_ids or [], ensure_ascii=True),
+                    goal_id,
+                    step_id,
+                    status,
+                    scores["urgency"],
+                    scores["impact"],
+                    scores["confidence"],
+                    scores["attention_cost"],
+                    risk_level,
+                    json.dumps(proposed_action, ensure_ascii=True, sort_keys=True)
+                    if proposed_action is not None
+                    else None,
+                    duplicate,
+                    deliver_after,
+                    expires_at,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def get_agent_opportunity(self, opportunity_id: int) -> dict | None:
+        """Return one opportunity by id."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM agent_opportunities
+                WHERE id = ?
+                """,
+                (opportunity_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_agent_opportunity_by_duplicate_key(
+        self,
+        duplicate_key: str,
+    ) -> dict | None:
+        """Return the newest opportunity with the same duplicate key."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM agent_opportunities
+                WHERE duplicate_key = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (duplicate_key,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def list_agent_opportunities(
+        self,
+        status: str | None = None,
+        kind: str | None = None,
+        goal_id: int | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Return recent opportunities, newest first."""
+        clauses = []
+        params: list = []
+        if status is not None:
+            self._validate_opportunity_status(status)
+            clauses.append("status = ?")
+            params.append(status)
+        if kind is not None:
+            clauses.append("kind = ?")
+            params.append(kind)
+        if goal_id is not None:
+            clauses.append("goal_id = ?")
+            params.append(goal_id)
+
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(limit)
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM agent_opportunities
+                {where}
+                ORDER BY updated_at DESC, id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def update_agent_opportunity(
+        self,
+        opportunity_id: int,
+        status: str | None = None,
+        step_id: int | None = None,
+        rationale: str | None = None,
+        urgency: int | None = None,
+        impact: int | None = None,
+        confidence: int | None = None,
+        attention_cost: int | None = None,
+        risk_level: str | None = None,
+        proposed_action: dict | list | None = None,
+    ) -> bool:
+        """Update mutable policy/delivery fields on an opportunity."""
+        existing = self.get_agent_opportunity(opportunity_id)
+        if existing is None:
+            return False
+
+        updates = []
+        params = []
+        if status is not None:
+            self._validate_opportunity_status(status)
+            updates.append("status = ?")
+            params.append(status)
+        if step_id is not None:
+            updates.append("step_id = ?")
+            params.append(step_id)
+        if rationale is not None:
+            updates.append("rationale = ?")
+            params.append(rationale)
+        for column, value in (
+            ("urgency", urgency),
+            ("impact", impact),
+            ("confidence", confidence),
+            ("attention_cost", attention_cost),
+        ):
+            if value is not None:
+                updates.append(f"{column} = ?")
+                params.append(self._validate_opportunity_score(value, column))
+        if risk_level is not None:
+            self._validate_opportunity_risk(risk_level)
+            updates.append("risk_level = ?")
+            params.append(risk_level)
+        if proposed_action is not None:
+            updates.append("proposed_action_json = ?")
+            params.append(
+                json.dumps(proposed_action, ensure_ascii=True, sort_keys=True)
+            )
+        if not updates:
+            return True
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        updates.append("updated_at = ?")
+        params.append(now)
+        params.append(opportunity_id)
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                f"""
+                UPDATE agent_opportunities
+                SET {", ".join(updates)}
+                WHERE id = ?
+                """,
+                params,
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def _validate_opportunity_status(self, status: str):
+        if status not in AGENT_OPPORTUNITY_STATUSES:
+            choices = ", ".join(sorted(AGENT_OPPORTUNITY_STATUSES))
+            raise ValueError(
+                f"Invalid opportunity status '{status}'. Expected one of: {choices}"
+            )
+
+    def _validate_opportunity_risk(self, risk_level: str):
+        if risk_level not in AGENT_OPPORTUNITY_RISK_LEVELS:
+            choices = ", ".join(sorted(AGENT_OPPORTUNITY_RISK_LEVELS))
+            raise ValueError(
+                f"Invalid opportunity risk_level '{risk_level}'. "
+                f"Expected one of: {choices}"
+            )
+
+    def _validate_opportunity_score(self, value: int, label: str) -> int:
+        score = int(value)
+        if score < 0 or score > 5:
+            raise ValueError(f"{label} must be between 0 and 5")
+        return score
+
+    def _default_opportunity_duplicate_key(
+        self,
+        kind: str,
+        title: str,
+        goal_id: int | None,
+        step_id: int | None,
+    ) -> str:
+        normalized_title = " ".join(title.casefold().split())
+        return f"{kind}:goal={goal_id or ''}:step={step_id or ''}:{normalized_title}"
 
     # --- Agent Actions ---
 

@@ -9,6 +9,7 @@ from goals import SharedGoalStore
 from memory import PersonaMemory
 from tools import create_tools
 from tools.goal_tools import GoalTool, SuggestionTool
+from tools.opportunity_tool import OpportunityTool
 
 
 def make_store(tmp_path):
@@ -112,8 +113,10 @@ def test_create_tools_registers_goal_tools_with_shared_store(tmp_path, monkeypat
     tools = create_tools(memory, goal_store=store)
 
     assert isinstance(tools["goals"], GoalTool)
+    assert isinstance(tools["opportunities"], OpportunityTool)
     assert isinstance(tools["suggestions"], SuggestionTool)
     assert tools["goals"].store is store
+    assert tools["opportunities"].store is store
     assert tools["suggestions"].store is store
 
 
@@ -126,7 +129,7 @@ def test_agent_prompt_distinguishes_planning_from_targeted_cycles():
         "tool_contexts": {"goals": "GOALS\nCareer\n  #1 Learn more about AI safety"},
         "scheduled_plan": None,
         "pending_proposals": [],
-        "available_actions": "Tools:\n  - suggestions.propose_suggestion",
+        "available_actions": "Tools:\n  - opportunities.propose_goal_step",
         "schedule_config": None,
         "actions_today": 0,
     }
@@ -135,9 +138,68 @@ def test_agent_prompt_distinguishes_planning_from_targeted_cycles():
     targeted_prompt = _build_agent_prompt(**base_kwargs, is_planning=False)
 
     assert "propose 1-3 concrete one-shot suggestions" in planning_prompt
-    assert "Use suggestions.propose_suggestion" in planning_prompt
+    assert "Use opportunities.propose_goal_step" in planning_prompt
+    assert "Do not call suggestions.propose_suggestion directly" in planning_prompt
     assert "This is not a planning cycle" in targeted_prompt
     assert "Do not propose new goal suggestions" in targeted_prompt
+
+
+def test_opportunity_tool_records_and_delivers_goal_step(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    goal_id = store.create_goal("career", "Learn more about AI safety")
+    memory = make_memory(tmp_path, monkeypatch)
+    tool = OpportunityTool(memory, store, created_by_persona="jo")
+
+    result = tool.execute(
+        "propose_goal_step",
+        goal_id=goal_id,
+        title="Draft three alignment questions",
+        rationale="A question list makes the next reading session sharper.",
+    )
+
+    opportunities = memory.list_agent_opportunities(kind="suggest_goal_step")
+    steps = store.list_steps(goal_id=goal_id, status="suggested")
+    events = memory.get_agent_events(event_type="opportunity_delivered")
+
+    assert "Recorded opportunity" in result
+    assert len(opportunities) == 1
+    assert opportunities[0]["status"] == "delivered"
+    assert opportunities[0]["step_id"] == steps[0]["id"]
+    assert "delivered_step_id" in opportunities[0]["proposed_action_json"]
+    assert steps[0]["title"] == "Draft three alignment questions"
+    assert steps[0]["source"] == "agent_planning"
+    assert len(events) == 1
+
+
+def test_opportunity_tool_suppresses_dismissed_repeat(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    goal_id = store.create_goal("health", "Stay active & healthy")
+    memory = make_memory(tmp_path, monkeypatch)
+    tool = OpportunityTool(memory, store, created_by_persona="jo")
+
+    first = tool.execute(
+        "propose_goal_step",
+        goal_id=goal_id,
+        title="Pick a short walk window",
+        rationale="A specific window makes the step easier to accept.",
+    )
+    opportunity = memory.list_agent_opportunities(kind="suggest_goal_step")[0]
+    tool.execute(
+        "dismiss_opportunity",
+        opportunity_id=opportunity["id"],
+        reason="Not useful this week.",
+    )
+    second = tool.execute(
+        "propose_goal_step",
+        goal_id=goal_id,
+        title="Pick a short walk window",
+        rationale="Try the same idea again.",
+    )
+
+    assert "Recorded opportunity" in first
+    assert "Suppressed similar opportunity" in second
+    assert len(memory.list_agent_opportunities(kind="suggest_goal_step")) == 1
+    assert len(store.list_steps(goal_id=goal_id, status="suggested")) == 1
 
 
 def test_planning_cycle_can_create_dashboard_visible_suggestion(
@@ -151,8 +213,8 @@ def test_planning_cycle_can_create_dashboard_visible_suggestion(
 
     response = json.dumps([
         {
-            "tool": "suggestions",
-            "method": "propose_suggestion",
+            "tool": "opportunities",
+            "method": "propose_goal_step",
             "parameters": {
                 "goal_id": goal_id,
                 "title": "Ask what would make tomorrow easier",
@@ -180,9 +242,71 @@ def test_planning_cycle_can_create_dashboard_visible_suggestion(
     assert asyncio.run(run_agent_cycle(trigger, memory, tools, "You are Jo.")) is True
 
     suggestions = store.list_steps(goal_id=goal_id, status="suggested")
+    opportunities = memory.list_agent_opportunities(kind="suggest_goal_step")
     assert len(suggestions) == 1
     assert suggestions[0]["title"] == "Ask what would make tomorrow easier"
     assert suggestions[0]["source"] == "agent_planning"
+    assert len(opportunities) == 1
+    assert opportunities[0]["status"] == "delivered"
+    assert opportunities[0]["step_id"] == suggestions[0]["id"]
+    assert json.loads(opportunities[0]["evidence_event_ids"])
 
     dashboard_model = build_dashboard_model(store)
     assert dashboard_model["suggestions"][0]["display_text"] == "Ask what would make tomorrow easier"
+
+
+def test_planning_cycle_routes_legacy_direct_suggestion_through_opportunity(
+    tmp_path,
+    monkeypatch,
+):
+    store = make_store(tmp_path)
+    goal_id = store.create_goal("money", "Make some extra money")
+    memory = make_memory(tmp_path, monkeypatch)
+    tools = create_tools(memory, goal_store=store)
+
+    response = json.dumps([
+        {
+            "tool": "suggestions",
+            "method": "propose_suggestion",
+            "parameters": {
+                "goal_id": goal_id,
+                "title": "List two low-effort tutoring offers",
+                "rationale": "This keeps the money goal concrete.",
+            },
+        }
+    ])
+
+    monkeypatch.setattr(
+        "agent.brain.ask",
+        lambda *args, **kwargs: (
+            "<reasoning>Use the old direct suggestion action.</reasoning>\n"
+            f"<actions>{response}</actions>\n"
+            "<narrative_state>Suggested one money step.</narrative_state>"
+        ),
+    )
+
+    trigger = {
+        "id": 43,
+        "type": "agent_cycle",
+        "fire_at": "2026-05-17 08:00:00",
+        "context": json.dumps({
+            "purpose": "Planning cycle",
+            "job_type": "planning",
+            "tools": [],
+        }),
+    }
+
+    assert asyncio.run(run_agent_cycle(trigger, memory, tools, "You are Jo.")) is True
+
+    suggestions = store.list_steps(goal_id=goal_id, status="suggested")
+    opportunities = memory.list_agent_opportunities(kind="suggest_goal_step")
+    conn = memory._connect()
+    actions = conn.execute(
+        "SELECT tool_name, method_name FROM agent_actions ORDER BY id ASC"
+    ).fetchall()
+    conn.close()
+
+    assert len(suggestions) == 1
+    assert len(opportunities) == 1
+    assert opportunities[0]["step_id"] == suggestions[0]["id"]
+    assert actions[0]["tool_name"] == "opportunities"

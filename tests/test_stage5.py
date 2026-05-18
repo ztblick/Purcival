@@ -287,6 +287,80 @@ class TestAgentJobs:
         assert events[0]["source_id"] == str(job_id)
 
 
+class TestAgentOpportunities:
+    def setup_method(self):
+        self.tmpdir = tempfile.mkdtemp()
+        with patch("memory.DATA_DIR", Path(self.tmpdir)):
+            self.memory = PersonaMemory("test_persona")
+
+    def test_add_and_list_opportunity(self):
+        opportunity_id = self.memory.add_agent_opportunity(
+            kind="suggest_goal_step",
+            title="Draft three research questions",
+            rationale="The goal needs a concrete next step.",
+            evidence_event_ids=[1, 2],
+            goal_id=7,
+            urgency=2,
+            impact=4,
+            confidence=3,
+            attention_cost=1,
+            proposed_action={"tool": "suggestions"},
+            duplicate_key="suggest_goal_step:goal=7:draft three research questions",
+        )
+
+        opportunity = self.memory.get_agent_opportunity(opportunity_id)
+        listed = self.memory.list_agent_opportunities(kind="suggest_goal_step")
+
+        assert opportunity["status"] == "candidate"
+        assert json.loads(opportunity["evidence_event_ids"]) == [1, 2]
+        assert json.loads(opportunity["proposed_action_json"])["tool"] == "suggestions"
+        assert listed[0]["id"] == opportunity_id
+
+    def test_update_opportunity_status_and_step_link(self):
+        opportunity_id = self.memory.add_agent_opportunity(
+            kind="suggest_goal_step",
+            title="Ask what would make tomorrow easier",
+            rationale="Family support goal has useful next action.",
+            goal_id=3,
+        )
+
+        assert self.memory.update_agent_opportunity(
+            opportunity_id,
+            status="delivered",
+            step_id=12,
+            proposed_action={"delivered_step_id": 12},
+        )
+        opportunity = self.memory.get_agent_opportunity(opportunity_id)
+
+        assert opportunity["status"] == "delivered"
+        assert opportunity["step_id"] == 12
+        assert json.loads(opportunity["proposed_action_json"])["delivered_step_id"] == 12
+
+    def test_duplicate_key_returns_newest_matching_opportunity(self):
+        duplicate_key = "suggest_goal_step:goal=1:repeat"
+        first_id = self.memory.add_agent_opportunity(
+            kind="suggest_goal_step",
+            title="Repeat",
+            rationale="first",
+            duplicate_key=duplicate_key,
+        )
+        second_id = self.memory.add_agent_opportunity(
+            kind="suggest_goal_step",
+            title="Repeat",
+            rationale="second",
+            status="dismissed",
+            duplicate_key=duplicate_key,
+        )
+
+        opportunity = self.memory.get_agent_opportunity_by_duplicate_key(
+            duplicate_key
+        )
+
+        assert first_id != second_id
+        assert opportunity["id"] == second_id
+        assert opportunity["status"] == "dismissed"
+
+
 class TestScheduleConfigMigration:
     def setup_method(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -933,6 +1007,7 @@ if __name__ == "__main__":
         TestReasoningLog,
         TestAgentEvents,
         TestAgentJobs,
+        TestAgentOpportunities,
         TestScheduleConfigMigration,
         TestTriggerOperations,
         TestJSONActionParsing,
