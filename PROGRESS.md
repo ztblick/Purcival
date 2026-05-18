@@ -10,8 +10,8 @@ agent sessions. Read it in full each session. Update sections marked
 
 **Last updated:** 2026-05-18
 **Active task:** Core agent reliability redesign
-**Phase:** Phase E.5 - operational verification gate; architecture feature audit complete
-**Status:** The Goals dashboard task is closed as the primary development focus. Do not continue dashboard Phase 6 as previously scoped. The new primary focus is the plan in `Design/core_agent_reliability_redesign.md`: migrate the agent loop toward an event log, explicit job types, an opportunity queue, planner/policy/compiler separation, durable execution state, a dashboard delivery inbox, scoped capabilities, and an untrusted-content boundary before adding web/file/computer tools. Phase A safety/instrumentation is complete. Phase B added per-persona `agent_events`, explicit `agent_jobs`, `job_type` metadata on new planning triggers, job leases/retries/completion receipts, and durable tool-observation events before reasoning. Phase C added per-persona `agent_opportunities`, registered `OpportunityTool`, routed planning-cycle step suggestions through `opportunities.propose_goal_step`, created dashboard-visible suggested steps only after recording a delivered opportunity, and suppressed dismissed/rejected/blocked duplicate opportunities. Phase D added shared event-backed accountability receipts for step accept/reject/complete/abandon, scored `accountability_check` opportunities, trusted internal `SuggestionTool` writes, and narrow focused-chat completion/abandonment receipts. Phase E first added the local delivery-inbox slice: per-persona `agent_inbox_items`, dashboard inbox cards for delivered suggestions and stale accountability checks, accept/reject/done/abandon/open-chat/dismiss/snooze actions, and idempotent opportunity-to-card delivery. The Phase E mobile/auth/service slice is now implemented in code from section 5.11: dashboard runtime config guards, PBKDF2 password hashing, signed cookie sessions, CSRF on post-login mutations, private-route auth enforcement, anti-impersonation actor handling, a supported dashboard runner, a non-Telegram Jo agent-loop runner, Windows Task Scheduler wrapper scripts, and updated setup docs all landed with full pytest passing. The section 5.1-5.10 architecture audit found that Phases A-E succeeded at the early substrate but did not complete structured working memory, planner/policy/compiler separation, per-action execution state, scoped capability metadata, the untrusted-content boundary, or the learning loop. The phase plan now inserts Phase E.5 operational verification, Phase F structured working memory/reflection, Phase G planner-policy-compiler, Phase H durable action execution/capability registry, Phase I delivery policy/correction UX, Phase J untrusted-content/web-file tools, and Phase K higher-autonomy external execution. Remaining immediate work is operational verification on Zach's actual Windows/Tailscale/phone setup: confirm the exact Tailscale Serve commands, verify phone login and inbox/chat flows over the tailnet URL, and verify Task Scheduler startup behavior after reboot/logon.
+**Phase:** Phase F - structured working memory and reflection implementation approved
+**Status:** The Goals dashboard task is closed as the primary development focus. Do not continue dashboard Phase 6 as previously scoped. The new primary focus is the plan in `Design/core_agent_reliability_redesign.md`: migrate the agent loop toward an event log, explicit job types, an opportunity queue, planner/policy/compiler separation, durable execution state, a dashboard delivery inbox, scoped capabilities, and an untrusted-content boundary before adding web/file/computer tools. Phase A safety/instrumentation is complete. Phase B added per-persona `agent_events`, explicit `agent_jobs`, `job_type` metadata on new planning triggers, job leases/retries/completion receipts, and durable tool-observation events before reasoning. Phase C added per-persona `agent_opportunities`, registered `OpportunityTool`, routed planning-cycle step suggestions through `opportunities.propose_goal_step`, created dashboard-visible suggested steps only after recording a delivered opportunity, and suppressed dismissed/rejected/blocked duplicate opportunities. Phase D added shared event-backed accountability receipts for step accept/reject/complete/abandon, scored `accountability_check` opportunities, trusted internal `SuggestionTool` writes, and narrow focused-chat completion/abandonment receipts. Phase E first added the local delivery-inbox slice: per-persona `agent_inbox_items`, dashboard inbox cards for delivered suggestions and stale accountability checks, accept/reject/done/abandon/open-chat/dismiss/snooze actions, and idempotent opportunity-to-card delivery. The Phase E mobile/auth/service slice is implemented and Zach has verified the private mobile dashboard setup works through Tailscale with Purcival dashboard auth in place. The section 5.1-5.10 architecture audit found that Phases A-E succeeded at the early substrate but did not complete structured working memory, planner/policy/compiler separation, per-action execution state, scoped capability metadata, the untrusted-content boundary, or the learning loop. The next implementation target is Phase F: add typed durable working memory and a reflection job that processes recent events into evidence-backed memory/preference records. Keep Phase F narrow; do not start planner/compiler, capability registry, web tools, file tools, public hosting, or computer-control work.
 
 ---
 
@@ -58,11 +58,12 @@ The core thesis:
    accepted steps, and keeps the chat internal-action path narrow until the
    Phase E delivery inbox/side channel exists.
 6. Review the Phase E implementation notes: the dashboard now has auth, CSRF,
-   startup runners, and PowerShell Task Scheduler wrappers in place.
+   startup runners, PowerShell Task Scheduler wrappers, and Zach-verified
+   Tailscale mobile access.
 7. Review section 6.5 of the design doc before starting the next phase; it
    maps section 5.1-5.10 features to implementation status.
-8. Next execution target: verify Tailscale Serve, phone login/chat/inbox
-   behavior, and Windows Task Scheduler startup on Zach's actual machine.
+8. Next execution target: implement Phase F working memory and reflection per
+   `Design/core_agent_reliability_redesign.md`.
 
 ### Do:
 
@@ -218,19 +219,16 @@ suggestions and confirms they feel better-tuned.
 
 ## Open questions for Zach                               *updatable*
 
-- Before Phase D/E, one focused review remains: what exact
-  receipt/undo/correction UX should the dashboard provide for autonomous
-  internal writes such as created goals, modified goals, completed steps,
-  abandoned steps, and learned memories?
+- Phase I still needs a concrete correction UX for autonomous internal writes
+  such as created goals, modified goals, completed steps, abandoned steps, and
+  learned memories. This does not block Phase F's first typed-memory slice.
 
 ---
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-- None currently. Zach's 2026-05-18 request to begin implementing the Phase E
-  mobile/security slice served as the approval to move past the section 5.11
-  design gate. Remaining work is manual operational verification, not a design
-  freeze question.
+- None currently. Zach verified Phase E mobile access through Tailscale and
+  asked to hand off to a new Codex chat to begin Phase F implementation.
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -245,10 +243,11 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-18 - Core agent reliability Phase E.5 verification handoff - recorded Zach's successful Tailscale mobile verification, marked Phase F structured working memory/reflection as the next approved implementation target, refreshed `AGENTS.md`, `README.md`, `PROGRESS.md`, and `Design/core_agent_reliability_redesign.md` for a fresh Codex handoff - committed.
 - 2026-05-18 - Core agent reliability architecture audit - mapped proposed architecture features 5.1 through 5.10 against the Phase A-E code, documented the partial/missing pieces in `Design/core_agent_reliability_redesign.md`, and revised the phase plan so structured memory/reflection, planner-policy-compiler separation, durable action execution, capability metadata, delivery correction UX, and the untrusted-content boundary land before web/file tools - committed.
 - 2026-05-18 - Core agent reliability Phase E secure access implementation - added dashboard runtime config guards, PBKDF2 password hashing, signed session auth, CSRF on post-login mutations, verified actor attribution, dashboard and agent-loop runner scripts, Windows Task Scheduler PowerShell wrappers, README/.env updates, and restored full pytest to passing - committed.
-- 2026-05-18 - Core agent reliability Phase E anti-impersonation design - tightened the mobile access design so Tailscale controls network reachability, Purcival signed sessions control Zach identity, tailnet admission uses device approval and least-privilege policy, and dashboard actor fields cannot be spoofed from requests - awaiting Zach review.
-- 2026-05-18 - Core agent reliability Phase E security/access design - drafted the mobile access/security handoff: Tailscale Serve over loopback, dashboard-local auth and CSRF, safe bind modes, Task Scheduler startup, a non-Telegram agent-loop runner requirement, test plan, acceptance criteria, and rollback path - awaiting Zach review.
+- 2026-05-18 - Core agent reliability Phase E anti-impersonation design - tightened the mobile access design so Tailscale controls network reachability, Purcival signed sessions control Zach identity, tailnet admission uses device approval and least-privilege policy, and dashboard actor fields cannot be spoofed from requests - superseded by implementation and verification.
+- 2026-05-18 - Core agent reliability Phase E security/access design - drafted the mobile access/security handoff: Tailscale Serve over loopback, dashboard-local auth and CSRF, safe bind modes, Task Scheduler startup, a non-Telegram agent-loop runner requirement, test plan, acceptance criteria, and rollback path - superseded by implementation and verification.
 - 2026-05-18 - Core agent reliability Phase E - added per-persona `agent_inbox_items`, delivered opportunity-backed dashboard inbox cards for suggestions and stale accountability checks, wired card actions through existing receipts, added snooze/dismiss/open-chat handling, and kept focused inbox/dashboard tests passing - committed.
 - 2026-05-18 - Core agent reliability Phase D - added event-backed accountability receipts for step status changes, scored `accountability_check` opportunities for accepted/stale steps, dashboard complete/abandon controls, focused-chat completion/abandonment receipts, and full pytest passing - committed.
 - 2026-05-18 - Core agent reliability Phase C - added per-persona `agent_opportunities`, registered `OpportunityTool`, routed planning-cycle step suggestions through opportunity records, delivered low-risk opportunities as dashboard-visible suggested steps, added duplicate suppression, and kept focused Phase C tests passing - committed.
@@ -325,6 +324,7 @@ Append entries; never edit prior ones.
 - **2026-05-18 - Phase E dashboard auth uses PBKDF2 plus signed sessions.** The secure-access slice uses a standard-library PBKDF2-HMAC-SHA256 password hash, one HMAC-signed cookie session, and CSRF tokens derived from the session nonce. This keeps the one-user local dashboard dependency-light while still enforcing a real auth boundary before any non-local exposure.
 - **2026-05-18 - Phase E Windows startup uses dedicated runners plus PowerShell wrappers.** `scripts/run_dashboard.py` and `scripts/run_agent_loop.py` are the supported Python entrypoints, and `scripts/start_dashboard.ps1` / `scripts/start_agent_loop.ps1` are the Windows Task Scheduler targets so startup behavior stays explicit, repo-local, and easy to audit without introducing a service-wrapper dependency.
 - **2026-05-18 - Section 5.1-5.10 audit gates web/file tools behind missing core architecture.** Phases A-E produced a useful event/job/opportunity/inbox substrate, but did not complete structured working memory, planner/policy/compiler separation, per-action execution state, scoped capability metadata, the untrusted-content boundary, or the learning loop. The revised plan makes those Phase F-I prerequisites before Phase J web/file tools and Phase K higher-autonomy external actions.
+- **2026-05-18 - Phase E.5 mobile verification is accepted and Phase F is approved.** Zach verified the private mobile dashboard setup through Tailscale. The next Codex chat should begin Phase F implementation for typed working memory and reflection, while keeping web/file tools and broader planner/compiler/capability work out of scope until their later phases.
 
 ---
 

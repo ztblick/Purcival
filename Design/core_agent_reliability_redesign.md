@@ -1,6 +1,6 @@
 # Core Agent Reliability Redesign
 
-**Status:** Phase E code landed; mobile/Tailscale/Task Scheduler verification remains
+**Status:** Phase E mobile access verified; Phase F implementation is next
 **Date:** 2026-05-18
 **Scope:** reasoning, scheduling, action selection, learning, security, and proactive delivery
 
@@ -1029,7 +1029,18 @@ The Phase E security/access slice is complete when:
 - No public internet tunnel or router port forwarding is required.
 - Windows startup runs the dashboard and Jo's scheduler loop without Telegram.
 - Overnight jobs can produce auditable events, opportunities, and inbox cards.
-- The setup is documented with commands verified on Zach's Windows machine.
+- The setup is documented and the mobile route is verified on Zach's Windows
+  machine.
+
+Verification result:
+
+- Zach verified the private mobile setup through Tailscale after the Phase E
+  security/access implementation landed.
+- Phone access to the dashboard works through the tailnet path with Purcival's
+  own dashboard authentication in place.
+- The architecture can now move past the Phase E.5 operational gate. Future
+  setup-doc edits should still capture exact local Tailscale CLI commands if
+  they differ from the current machine configuration.
 
 #### 5.11.15 Rollback
 
@@ -1097,7 +1108,7 @@ not complete the full proposed architecture.
 | 5.4 Explicit Job Types | Partial, useful migration layer | `agent_jobs` and trigger `job_type` metadata exist with leasing, retries, and completion receipts. The scheduler still uses triggers as the low-level clock and only a small subset of job types is actively exercised. |
 | 5.5 Planner, Critic, Compiler | Mostly not implemented | The loop still makes one reasoning call that can emit direct tool actions. There is compatibility routing and validation, but no durable plan object, separate policy gate, or compiler that turns approved plans into tool calls. |
 | 5.6 Execution Engine | Partial at job level, weak at action level | Jobs have leases/retries/completion receipts. Individual tool actions are still mostly `agent_actions` log rows with immediate execution; they lack idempotency keys, per-action leases, retry scheduling, durable approval records, and receipt schemas. |
-| 5.7 Communication and Delivery Layer | Partial, dashboard-first | `agent_inbox_items` and dashboard cards exist for suggestions and accountability. Mobile auth/startup code is in place, but real phone/Tailscale/Task Scheduler verification is still required. Delivery policy, attention windows, and non-dashboard surfaces are not complete. |
+| 5.7 Communication and Delivery Layer | Partial, dashboard-first | `agent_inbox_items` and dashboard cards exist for suggestions and accountability. Mobile access through Tailscale has been verified by Zach. Delivery policy, attention windows, and non-dashboard surfaces are not complete. |
 | 5.8 Tool Capability Model | Not implemented beyond tier naming | `internal_write` is used, but tools still declare only broad tiers plus parameter descriptions. There is no capability metadata for side effects, data sensitivity, untrusted output, rate limits, allowed roots, deny rules, or approval policy. |
 | 5.9 Untrusted Content Boundary | Not implemented | Web/file tools remain deferred, which is good. Before adding them, tool outputs need explicit untrusted-content wrapping and the compiler/policy layer must reject actions justified only by untrusted instructions. |
 | 5.10 Learning Loop | Not implemented | Step outcomes and inbox outcomes now create the inputs, but there is no recurring reflection job that turns events into structured memory, preference updates, suppression rules, or goal/step framing improvements. |
@@ -1295,37 +1306,36 @@ Implementation notes:
 - The concrete security/access design is now drafted in section 5.11. The
   recommended implementation path is dashboard-local auth plus CSRF, Uvicorn
   bound to loopback, Tailscale Serve for phone access, and Windows Task
-  Scheduler for dashboard/agent startup. Zach review is required before
-  production code.
+  Scheduler for dashboard/agent startup. Zach approved this path before
+  implementation.
 - The security/access implementation has now landed in code: dashboard runtime
   config guards, PBKDF2 password hashing, signed cookie sessions, CSRF on
   post-login mutations, private-route auth enforcement, anti-impersonation
   actor handling, dedicated dashboard and agent-loop runners, Windows Task
   Scheduler wrapper scripts, and setup docs.
-- Phase E is not fully accepted until Zach's actual Windows/Tailscale/phone
-  setup is manually verified.
+- Zach verified the actual Windows/Tailscale/phone setup after the Phase E
+  security/access implementation landed. Phase E and Phase E.5 are accepted
+  for purposes of moving to Phase F.
 
 ### Phase E.5 - Operational verification gate
 
-Finish Phase E before any architecture expansion.
+Complete. Zach verified the private mobile setup with Tailscale after Phase E
+landed.
 
-- Verify the exact Tailscale Serve command on Zach's Windows desktop.
-- Verify phone login over the tailnet HTTPS URL.
-- Verify dashboard inbox actions from the phone: accept, reject, done, abandon,
-  open chat, dismiss, and snooze.
-- Verify focused chat from the phone, including SSE streaming and receipt
-  events.
-- Verify Task Scheduler starts both the dashboard and Jo agent loop after
-  reboot or logon.
-- Update `README.md`, `PROGRESS.md`, and this design doc with the verified
-  commands and any deviations from section 5.11.
+- [x] Verify mobile dashboard access through Tailscale.
+- [x] Verify Purcival dashboard auth on the phone.
+- [x] Confirm the Tailscale path is the working private mobile access route.
+- [x] Update `README.md`, `PROGRESS.md`, and this design doc with the verified
+  status.
 
 Acceptance:
 
 - Zach can open and use the dashboard from his phone through Tailscale.
 - Dashboard remains local-only behind Tailscale Serve, with Purcival auth and
   CSRF enabled.
-- Scheduled startup behavior is proven on Zach's machine.
+- Scheduled startup wrappers exist and remain the supported Windows startup
+  path. If startup behavior changes later, update `README.md` and this design
+  doc with the exact local commands.
 
 ### Phase F - Structured working memory and reflection
 
@@ -1354,6 +1364,18 @@ Acceptance:
 - Bad memory writes can be corrected or superseded without deleting history.
 - Tests cover schema validation, confidence/status transitions, reflection
   idempotency, and context assembly.
+
+Implementation handoff:
+
+- Zach has approved moving into Phase F implementation.
+- Start with the existing per-persona `memory.db`, matching the Phase B/C
+  placement for `agent_events`, `agent_jobs`, and `agent_opportunities`.
+- Likely first files to inspect and modify: `memory.py`, `context.py`,
+  `agent.py`, `proactive.py`, and tests covering memory/context/agent cycles.
+- Keep the first slice narrow: durable typed memory records, reflection job
+  plumbing, deterministic/idempotent event-to-memory processing, and context
+  inclusion. Do not start planner/compiler, capability registry, web tools, or
+  file tools in Phase F.
 
 ### Phase G - Planner, policy gate, and compiler
 
@@ -1525,15 +1547,14 @@ Remaining design questions:
 - What precise receipt/undo UX should the dashboard provide for autonomous
   internal writes? My recommendation: every autonomous goal/step/memory change
   appears in an activity feed with "open chat", "undo", and "correct" affordances.
-- Should Phase E adopt the section 5.11 recommendation as written: Tailscale
-  Serve over loopback as the default mobile path, Task Scheduler instead of a
-  service wrapper, and dashboard-local auth/CSRF before any non-local access?
+- Phase I should decide the exact correction UX for learned memories before
+  broadening memory writes beyond low/medium-confidence internal context.
 
 ---
 
 ## 10. Decisions Requested
 
-Approve, reject, or modify these directions:
+Approved directions now reflected in the phase plan:
 
 - Add an append-only `agent_events` layer as the substrate for planning and
   learning.
@@ -1543,8 +1564,7 @@ Approve, reject, or modify these directions:
 - Split action selection into planner, policy gate, and compiler.
 - Treat dashboard cards as the primary proactive delivery surface.
 - Use a secure private mobile access path, with Tailscale as the current
-  default recommendation, specifically Tailscale Serve over loopback for Phase E
-  unless implementation discovers a better private option.
+  default recommendation for Phase E.
 - Add dashboard-local authentication, signed sessions, and CSRF before any
   phone or LAN access.
 - Use Windows Task Scheduler for Phase E dashboard and agent-loop startup

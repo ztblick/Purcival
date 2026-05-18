@@ -290,9 +290,10 @@ out. The PowerShell wrappers append stdout/stderr to `logs/`.
 
 For private phone access, keep the dashboard bound to `127.0.0.1` and use
 Tailscale Serve to expose that socket inside Zach's tailnet. Do not use
-Funnel, router port forwarding, or a public tunnel for this service. The exact
-Tailscale CLI commands still need local verification on Zach's Windows machine
-before they should be treated as canonical setup instructions.
+Funnel, router port forwarding, or a public tunnel for this service. Zach has
+verified that the mobile dashboard setup works through Tailscale with Purcival
+dashboard auth in place. If the local Tailscale Serve mapping is recreated or
+changed, record the exact Windows commands here after running them.
 
 Capture dashboard screenshots:
 
@@ -346,7 +347,8 @@ services are available.
 
 ## Roadmap
 
-- Finish Phase E mobile verification on Zach's actual tailnet and phone.
-- Continue the event/job/opportunity redesign beyond the dashboard auth slice.
-- Add the untrusted-content boundary before web and local file tools.
+- Begin Phase F: structured working memory and reflection.
+- Keep web and local file tools blocked until structured memory, planner/policy
+  separation, durable action execution, scoped capabilities, and the
+  untrusted-content boundary have landed.
 - Keep Telegram dormant unless Zach explicitly reopens it.
