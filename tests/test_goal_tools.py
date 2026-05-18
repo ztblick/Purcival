@@ -118,6 +118,7 @@ def test_create_tools_registers_goal_tools_with_shared_store(tmp_path, monkeypat
     assert tools["goals"].store is store
     assert tools["opportunities"].store is store
     assert tools["suggestions"].store is store
+    assert tools["suggestions"].memory is memory
 
 
 def test_agent_prompt_distinguishes_planning_from_targeted_cycles():
@@ -168,6 +169,55 @@ def test_opportunity_tool_records_and_delivers_goal_step(tmp_path, monkeypatch):
     assert "delivered_step_id" in opportunities[0]["proposed_action_json"]
     assert steps[0]["title"] == "Draft three alignment questions"
     assert steps[0]["source"] == "agent_planning"
+    assert len(events) == 1
+
+
+def test_suggestion_tool_status_update_writes_receipt_event(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    goal_id = store.create_goal("career", "Learn more about AI safety")
+    step_id = store.create_step(goal_id, "Read one alignment paper", status="accepted")
+    memory = make_memory(tmp_path, monkeypatch)
+    tool = SuggestionTool(store, created_by_persona="jo", memory=memory)
+
+    result = tool.execute(
+        "complete_step",
+        step_id=step_id,
+        note="Zach said he finished it.",
+    )
+
+    events = memory.get_agent_events(event_type="step_completed")
+    feedback = store.list_step_feedback(step_id)
+
+    assert result == f"Updated step #{step_id} to completed"
+    assert store.get_step(step_id)["status"] == "completed"
+    assert len(events) == 1
+    assert json.loads(events[0]["payload_json"])["previous_status"] == "accepted"
+    assert feedback[0]["kind"] == "completion_note"
+
+
+def test_accepting_step_creates_accountability_opportunity(tmp_path, monkeypatch):
+    from accountability import record_step_status_change
+
+    store = make_store(tmp_path)
+    goal_id = store.create_goal("health", "Stay active & healthy")
+    step_id = store.create_step(goal_id, "Take a twenty minute walk")
+    memory = make_memory(tmp_path, monkeypatch)
+
+    receipt = record_step_status_change(
+        store=store,
+        memory=memory,
+        step_id=step_id,
+        status="accepted",
+        source="test",
+    )
+
+    opportunities = memory.list_agent_opportunities(kind="accountability_check")
+    events = memory.get_agent_events(event_type="step_accepted")
+
+    assert receipt["accountability_opportunity_id"] == opportunities[0]["id"]
+    assert store.get_step(step_id)["status"] == "accepted"
+    assert opportunities[0]["step_id"] == step_id
+    assert opportunities[0]["status"] in {"scheduled", "queued"}
     assert len(events) == 1
 
 

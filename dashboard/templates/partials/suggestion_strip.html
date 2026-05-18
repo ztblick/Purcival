@@ -3,6 +3,10 @@
     <h2 id="suggestions-heading">Steps</h2>
   </div>
 
+  {% if activity_receipt %}
+    <div class="activity-receipt" role="status">{{ activity_receipt }}</div>
+  {% endif %}
+
   <div class="step-grid">
     {% for step in visible_steps %}
       {% include "partials/step_card.html" %}

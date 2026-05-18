@@ -18,7 +18,7 @@
         hx-target="#steps-panel"
         hx-swap="outerHTML"
       >
-        <button class="decision-button decision-button--accept" type="submit" title="Accept step" aria-label="Accept {{ step.title }}">✓</button>
+        <button class="decision-button decision-button--accept" type="submit" title="Accept step" aria-label="Accept {{ step.title }}">&#10003;</button>
       </form>
       <form
         class="reject-form"
@@ -26,7 +26,24 @@
         hx-target="#steps-panel"
         hx-swap="outerHTML"
       >
-        <button class="decision-button decision-button--reject" type="submit" title="Reject step" aria-label="Reject {{ step.title }}">✕</button>
+        <button class="decision-button decision-button--reject" type="submit" title="Reject step" aria-label="Reject {{ step.title }}">&#10005;</button>
+      </form>
+    </div>
+  {% elif step.status == "accepted" %}
+    <div class="step-actions" aria-label="Step accountability controls">
+      <form
+        hx-post="/steps/{{ step.id }}/complete"
+        hx-target="#steps-panel"
+        hx-swap="outerHTML"
+      >
+        <button class="decision-button decision-button--accept" type="submit" title="Mark done" aria-label="Mark {{ step.title }} done">&#10003;</button>
+      </form>
+      <form
+        hx-post="/steps/{{ step.id }}/abandon"
+        hx-target="#steps-panel"
+        hx-swap="outerHTML"
+      >
+        <button class="decision-button decision-button--reject" type="submit" title="Abandon step" aria-label="Abandon {{ step.title }}">&#10005;</button>
       </form>
     </div>
   {% endif %}

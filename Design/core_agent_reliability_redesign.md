@@ -1,6 +1,6 @@
 # Core Agent Reliability Redesign
 
-**Status:** Phase C opportunity queue slice implemented
+**Status:** Phase D accountability slice implemented
 **Date:** 2026-05-18
 **Scope:** reasoning, scheduling, action selection, learning, security, and proactive delivery
 
@@ -732,6 +732,32 @@ Acceptance:
   events and opportunities.
 - "Talk with Jo, and Jo decides the step is no longer relevant" updates the
   step to abandoned with a visible receipt and reversible history.
+
+Implementation notes:
+
+- Phase D adds `accountability.py` as the shared status-change path for
+  dashboard UI actions, chat-derived internal actions, and the suggestion tool.
+  Step accept/reject/complete/abandon writes `step_*` events into the
+  persona `agent_events` log with previous status, evidence/message links,
+  receipt metadata, and an undo-status hint for the future correction UI.
+- Accepting a step creates or refreshes a per-step `accountability_check`
+  opportunity. Planning cycles also refresh accountability opportunities
+  deterministically before tool perception, so stale accepted steps are scored
+  and exposed through the opportunity context instead of being blindly pushed
+  into every prompt.
+- `SuggestionTool.update_status`, `complete_step`, and `abandon_step` are now
+  trusted `internal_write` actions backed by the same receipt path. Associated
+  opportunities are advanced to accepted/completed/rejected as the step state
+  changes.
+- The dashboard adds complete/abandon controls for accepted steps and shows a
+  compact receipt when UI status changes occur.
+- Focused step chat can apply completion/abandonment through a transitional
+  `<internal_actions>` block. The dashboard suppresses that block during SSE
+  streaming, validates that it only targets the active step, records the same
+  event-backed receipt, persists a visible receipt message, and refreshes the
+  steps panel. This is intentionally narrow and should be replaced by the
+  Phase E delivery/action side channel or inbox rather than expanded for broad
+  tool use.
 
 ### Phase E - Delivery inbox and mobile-ready dashboard
 

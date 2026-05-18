@@ -201,6 +201,15 @@ h3 {
   scrollbar-color: rgba(155, 92, 255, 0.55) rgba(255, 255, 255, 0.08);
 }
 
+.activity-receipt {
+  border: 1px solid rgba(109, 255, 179, 0.3);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  color: rgba(242, 239, 231, 0.84);
+  background: rgba(109, 255, 179, 0.08);
+  font-size: 0.84rem;
+}
+
 .goal-card,
 .step-card,
 .context-card {

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
+from accountability import refresh_accountability_opportunities
 from goals import SharedGoalStore
 from memory import (
     AGENT_OPPORTUNITY_SUPPRESSION_STATUSES,
@@ -39,7 +41,7 @@ class OpportunityTool(Tool):
         visible = [
             opportunity
             for opportunity in active
-            if opportunity["status"] in {"candidate", "queued", "scheduled", "delivered"}
+            if _is_visible_opportunity(opportunity)
         ]
         suppressed = [
             opportunity
@@ -97,6 +99,15 @@ class OpportunityTool(Tool):
                     "reason": {"type": "str", "description": "Short reason for suppression", "required": False},
                 },
             ),
+            ToolMethod(
+                name="refresh_accountability",
+                description=(
+                    "Ensure accepted steps have scored accountability "
+                    "opportunities."
+                ),
+                tier="internal_write",
+                parameters={},
+            ),
         ]
 
     def execute(self, method_name: str, **kwargs) -> str:
@@ -106,6 +117,8 @@ class OpportunityTool(Tool):
             return self._list_opportunities(**kwargs)
         if method_name == "dismiss_opportunity":
             return self._dismiss_opportunity(**kwargs)
+        if method_name == "refresh_accountability":
+            return self._refresh_accountability()
         raise ValueError(f"Unknown method '{method_name}' on OpportunityTool")
 
     def _propose_goal_step(
@@ -270,6 +283,18 @@ class OpportunityTool(Tool):
         )
         return f"Dismissed opportunity #{opportunity_id}"
 
+    def _refresh_accountability(self) -> str:
+        opportunity_ids = refresh_accountability_opportunities(
+            self.memory,
+            self.store,
+        )
+        if not opportunity_ids:
+            return "No accepted steps need accountability opportunities."
+        return (
+            "Refreshed accountability opportunities: "
+            + ", ".join(f"#{opportunity_id}" for opportunity_id in opportunity_ids)
+        )
+
 
 def _duplicate_key(goal_id: int, title: str) -> str:
     normalized = " ".join(title.casefold().split())
@@ -315,6 +340,20 @@ def _decode_action(raw: str | None) -> dict:
     except json.JSONDecodeError:
         return {}
     return decoded if isinstance(decoded, dict) else {}
+
+
+def _is_visible_opportunity(opportunity: dict) -> bool:
+    if opportunity["status"] in {"candidate", "queued", "delivered"}:
+        return True
+    if opportunity["status"] != "scheduled":
+        return False
+    deliver_after = opportunity.get("deliver_after")
+    if not deliver_after:
+        return True
+    try:
+        return datetime.strptime(deliver_after, "%Y-%m-%d %H:%M:%S") <= datetime.now()
+    except ValueError:
+        return True
 
 
 def _require_text(value: str, label: str) -> str:

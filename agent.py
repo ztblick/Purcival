@@ -35,6 +35,7 @@ from datetime import datetime
 
 import brain
 import config
+from accountability import refresh_accountability_opportunities
 from memory import PersonaMemory, trigger_context_job_type
 from context import assemble_context, DEVICE_TELEGRAM
 from tools.base import Tool, ToolMethod
@@ -219,9 +220,11 @@ def _build_agent_prompt(
             "This is not a planning cycle. Do not propose new goal "
             "suggestions unless the trigger purpose explicitly asks for "
             "suggestion bookkeeping. If accepted steps appear in context, "
-            "use them for relevant accountability without nagging. Do not "
-            "mark a step completed or abandoned without explicit user "
-            "confirmation."
+            "use them for relevant accountability without nagging. You may "
+            "mark a step completed or abandoned when conversation evidence "
+            "makes the internal update clear; use suggestions.update_status, "
+            "suggestions.complete_step, or suggestions.abandon_step so the "
+            "change writes an event-backed receipt."
         )
 
     # 10. Available actions + budget + JSON format instructions
@@ -439,6 +442,14 @@ async def run_agent_cycle(
     max_actions = 25
     if schedule_config:
         max_actions = schedule_config.get("max_actions_per_day", 25)
+
+    if is_planning and "opportunities" in tools:
+        opportunity_tool = tools["opportunities"]
+        if hasattr(opportunity_tool, "store"):
+            refresh_accountability_opportunities(
+                memory,
+                opportunity_tool.store,
+            )
 
     # --- Step 2: Perceive ---
     tool_contexts = {}

@@ -1,4 +1,5 @@
 import os
+import json
 import socket
 import subprocess
 import sys
@@ -257,6 +258,61 @@ def test_scoped_chat_stream_suppresses_schedule_updates(tmp_path, monkeypatch):
     assert assistant_message["content"] == "Visible before.  Visible after."
 
 
+def test_scoped_chat_stream_applies_internal_step_receipt(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
+    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+    monkeypatch.setattr(routes.personas, "load_persona", lambda name: "You are Jo.")
+    monkeypatch.setattr(routes, "check_and_summarize", lambda *args, **kwargs: 0)
+
+    step = next(
+        row for row in store.list_steps(status="suggested")
+        if row["title"] == "Go to Yoga6 in Palo Alto at 12pm"
+    )
+    store.update_step_status(step["id"], "accepted")
+    action_json = json.dumps([{
+        "tool": "steps",
+        "method": "abandon_step",
+        "parameters": {
+            "step_id": step["id"],
+            "note": "Zach said the class no longer fits.",
+        },
+    }])
+
+    def fake_stream(messages, system, provider=None, max_tokens=2048, task="chat"):
+        yield "That step no longer fits. "
+        yield "<internal_actions>"
+        yield action_json
+        yield "</internal_actions>"
+
+    monkeypatch.setattr(routes.brain, "stream", fake_stream)
+
+    client = TestClient(app)
+    post_response = client.post(
+        f"/chat/step/{step['id']}/messages",
+        data={"message": "Actually, this class does not fit anymore."},
+    )
+    assert post_response.status_code == 200
+
+    stream_response = client.get(f"/chat/streams/{post_response.json()['stream_id']}")
+    mem = PersonaMemory("jo")
+    scope = MessageScope.step(step["id"])
+    scoped_messages = mem.get_recent_messages(scope=scope)
+    event = mem.get_agent_events(event_type="step_abandoned")[0]
+    payload = json.loads(event["payload_json"])
+
+    assert stream_response.status_code == 200
+    assert "internal_actions" not in stream_response.text
+    assert "event: receipt" in stream_response.text
+    assert "abandoned" in stream_response.text
+    assert SharedGoalStore(db_path).get_step(step["id"])["status"] == "abandoned"
+    assert scoped_messages[-1]["content"].startswith("Receipt: abandoned")
+    assert payload["previous_status"] == "accepted"
+    assert payload["related_message_ids"]
+
+
 def test_step_accept_and_reject_routes(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)
@@ -277,6 +333,7 @@ def test_step_accept_and_reject_routes(tmp_path, monkeypatch):
     accept_response = client.post(f"/steps/{yoga_step['id']}/accept")
     assert accept_response.status_code == 200
     assert "step-card--accepted" in accept_response.text
+    assert "Receipt:" in accept_response.text
     assert SharedGoalStore(db_path).get_step(yoga_step["id"])["status"] == "accepted"
 
     reject_response = client.post(f"/steps/{lucid_step['id']}/reject")
@@ -286,6 +343,45 @@ def test_step_accept_and_reject_routes(tmp_path, monkeypatch):
     rejected = refreshed_store.get_step(lucid_step["id"])
     assert rejected["status"] == "rejected"
     assert refreshed_store.list_step_feedback(lucid_step["id"]) == []
+    mem = PersonaMemory("jo")
+    assert len(mem.get_agent_events(event_type="step_accepted")) == 1
+    assert len(mem.list_agent_opportunities(kind="accountability_check")) == 1
+    assert len(mem.get_agent_events(event_type="step_rejected")) == 1
+
+
+def test_step_complete_and_abandon_routes_write_receipts(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
+    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+
+    accepted_step_id = store.create_step(
+        goal_id=store.list_goals(status="active")[0]["id"],
+        title="Finish the accountability slice",
+        status="accepted",
+    )
+    abandoned_step_id = store.create_step(
+        goal_id=store.list_goals(status="active")[0]["id"],
+        title="Try a stale idea",
+        status="accepted",
+    )
+
+    client = TestClient(app)
+    complete_response = client.post(f"/steps/{accepted_step_id}/complete")
+    abandon_response = client.post(f"/steps/{abandoned_step_id}/abandon")
+
+    refreshed_store = SharedGoalStore(db_path)
+    mem = PersonaMemory("jo")
+
+    assert complete_response.status_code == 200
+    assert "marked done" in complete_response.text
+    assert abandon_response.status_code == 200
+    assert "abandoned" in abandon_response.text
+    assert refreshed_store.get_step(accepted_step_id)["status"] == "completed"
+    assert refreshed_store.get_step(abandoned_step_id)["status"] == "abandoned"
+    assert len(mem.get_agent_events(event_type="step_completed")) == 1
+    assert len(mem.get_agent_events(event_type="step_abandoned")) == 1
 
 
 def test_title_for_date_is_stable_for_same_day():

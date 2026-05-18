@@ -17,7 +17,8 @@ from fastapi.templating import Jinja2Templates
 import brain
 import memory as memory_module
 import personas
-from agent import strip_schedule_updates
+from accountability import format_receipt, record_step_status_change
+from agent import _parse_actions_json, strip_schedule_updates
 from context import DEVICE_TERMINAL, assemble_context
 from dashboard.motivation import title_for_date
 from goals import SharedGoalStore
@@ -30,6 +31,12 @@ DASHBOARD_PERSONA = "jo"
 CHAT_MESSAGE_PAGE_SIZE = 20
 SCHEDULE_UPDATES_START = "<schedule_updates>"
 SCHEDULE_UPDATES_END = "</schedule_updates>"
+INTERNAL_ACTIONS_START = "<internal_actions>"
+INTERNAL_ACTIONS_END = "</internal_actions>"
+CONTROL_BLOCK_MARKERS = (
+    (SCHEDULE_UPDATES_START, SCHEDULE_UPDATES_END),
+    (INTERNAL_ACTIONS_START, INTERNAL_ACTIONS_END),
+)
 
 router = APIRouter()
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
@@ -38,6 +45,7 @@ templates = Jinja2Templates(directory=TEMPLATE_DIR)
 @dataclass(frozen=True)
 class ChatStreamJob:
     scope: MessageScope
+    user_message_id: int | None = None
 
 
 _STREAM_JOBS: dict[str, ChatStreamJob] = {}
@@ -105,6 +113,7 @@ def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
         "chat_context": chat_context,
         "chat_messages": [],
         "has_more_messages": False,
+        "activity_receipt": None,
         "initial_title": title_for_date(),
     }
 
@@ -260,6 +269,24 @@ def build_entity_context(store: SharedGoalStore, scope: MessageScope) -> str:
         f"Category: {goal['category']}",
         f"Step: {step['title']}",
         f"Status: {step['status']}",
+        "",
+        "Trusted internal updates:",
+        (
+            "If the conversation gives clear evidence that this step should "
+            "be completed or abandoned, append an internal action block after "
+            "your normal reply. The dashboard will hide the block, apply the "
+            "update, record an event, and show Zach a receipt."
+        ),
+        (
+            f"Use only this current step id: {step['id']}. Format exactly: "
+            '<internal_actions>[{"tool":"steps","method":"complete_step",'
+            '"parameters":{"step_id":'
+            f'{step["id"]},"note":"short evidence"}}]</internal_actions>'
+        ),
+        (
+            "Use method abandon_step instead when the step is no longer "
+            "relevant. Do not use this block for external actions."
+        ),
     ]
     if step.get("description"):
         lines.append(f"Description: {step['description']}")
@@ -283,6 +310,118 @@ def format_sse(event: str, payload: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
 
 
+def extract_internal_actions(response: str) -> str | None:
+    start_index = response.find(INTERNAL_ACTIONS_START)
+    if start_index == -1:
+        return None
+    content_start = start_index + len(INTERNAL_ACTIONS_START)
+    end_index = response.find(INTERNAL_ACTIONS_END, content_start)
+    if end_index == -1:
+        return None
+    return response[content_start:end_index].strip()
+
+
+def strip_internal_actions(response: str) -> str:
+    cleaned = response
+    while True:
+        start_index = cleaned.find(INTERNAL_ACTIONS_START)
+        if start_index == -1:
+            return cleaned.strip()
+        end_index = cleaned.find(
+            INTERNAL_ACTIONS_END,
+            start_index + len(INTERNAL_ACTIONS_START),
+        )
+        if end_index == -1:
+            return cleaned[:start_index].strip()
+        cleaned = (
+            cleaned[:start_index]
+            + cleaned[end_index + len(INTERNAL_ACTIONS_END):]
+        )
+
+
+def apply_chat_internal_actions(
+    actions_json: str | None,
+    store: SharedGoalStore,
+    memory: PersonaMemory,
+    scope: MessageScope,
+    user_message_id: int | None,
+    assistant_message_id: int | None,
+) -> list[dict[str, Any]]:
+    if not actions_json:
+        return []
+
+    parsed_actions, parse_error = _parse_actions_json(actions_json)
+    if parse_error:
+        return [{
+            "status": "failed",
+            "message": f"Receipt failed: {parse_error}",
+        }]
+
+    receipts = []
+    for action in parsed_actions:
+        try:
+            receipt = _apply_one_chat_internal_action(
+                action,
+                store,
+                memory,
+                scope,
+                user_message_id,
+                assistant_message_id,
+            )
+            receipts.append(receipt)
+        except ValueError as exc:
+            receipts.append({
+                "status": "failed",
+                "message": f"Receipt failed: {exc}",
+            })
+    return receipts
+
+
+def _apply_one_chat_internal_action(
+    action: dict[str, Any],
+    store: SharedGoalStore,
+    memory: PersonaMemory,
+    scope: MessageScope,
+    user_message_id: int | None,
+    assistant_message_id: int | None,
+) -> dict[str, Any]:
+    tool_name = action.get("tool")
+    method_name = action.get("method")
+    parameters = action.get("parameters", {})
+    if not isinstance(parameters, dict):
+        parameters = {}
+    if tool_name not in {"steps", "suggestions"}:
+        raise ValueError("chat internal actions may only update steps")
+    status_by_method = {
+        "complete_step": "completed",
+        "abandon_step": "abandoned",
+        "update_status": parameters.get("status"),
+    }
+    status = status_by_method.get(method_name)
+    if status not in {"completed", "abandoned"}:
+        raise ValueError("chat internal actions may only complete or abandon steps")
+
+    step_id = int(parameters.get("step_id") or 0)
+    if scope.scope_type != "step" or step_id != scope.scope_id:
+        raise ValueError("chat internal actions may only update the active step")
+
+    note = parameters.get("note")
+    return record_step_status_change(
+        store=store,
+        memory=memory,
+        step_id=step_id,
+        status=status,
+        source="dashboard_chat",
+        actor=get_dashboard_persona(),
+        note=note if isinstance(note, str) else None,
+        related_message_ids=[
+            message_id
+            for message_id in (user_message_id, assistant_message_id)
+            if message_id is not None
+        ],
+    )
+
+
 def _matching_marker_suffix_length(text: str, marker: str) -> int:
     max_length = min(len(text), len(marker) - 1)
     for length in range(max_length, 0, -1):
@@ -292,17 +431,31 @@ def _matching_marker_suffix_length(text: str, marker: str) -> int:
 
 
 def _split_visible_prefix(buffer: str) -> tuple[str, str]:
-    keep_length = _matching_marker_suffix_length(buffer, SCHEDULE_UPDATES_START)
+    keep_length = max(
+        _matching_marker_suffix_length(buffer, start_marker)
+        for start_marker, _end_marker in CONTROL_BLOCK_MARKERS
+    )
     if keep_length == 0:
         return buffer, ""
     return buffer[:-keep_length], buffer[-keep_length:]
 
 
-def _discard_until_possible_end(buffer: str) -> str:
-    keep_length = _matching_marker_suffix_length(buffer, SCHEDULE_UPDATES_END)
+def _discard_until_possible_end(buffer: str, end_marker: str) -> str:
+    keep_length = _matching_marker_suffix_length(buffer, end_marker)
     if keep_length == 0:
         return ""
     return buffer[-keep_length:]
+
+
+def _find_first_control_start(buffer: str) -> tuple[int, str, str] | None:
+    matches = [
+        (buffer.find(start_marker), start_marker, end_marker)
+        for start_marker, end_marker in CONTROL_BLOCK_MARKERS
+        if buffer.find(start_marker) != -1
+    ]
+    if not matches:
+        return None
+    return min(matches, key=lambda match: match[0])
 
 
 def iter_user_visible_chunks(chunks: Iterable[str]) -> Iterator[str]:
@@ -313,7 +466,7 @@ def iter_user_visible_chunks(chunks: Iterable[str]) -> Iterator[str]:
     even when a provider splits the tag across arbitrary streaming chunks.
     """
     buffer = ""
-    inside_schedule_updates = False
+    active_end_marker: str | None = None
 
     for chunk in chunks:
         if not chunk:
@@ -321,22 +474,23 @@ def iter_user_visible_chunks(chunks: Iterable[str]) -> Iterator[str]:
         buffer += chunk
 
         while buffer:
-            if inside_schedule_updates:
-                end_index = buffer.find(SCHEDULE_UPDATES_END)
+            if active_end_marker is not None:
+                end_index = buffer.find(active_end_marker)
                 if end_index == -1:
-                    buffer = _discard_until_possible_end(buffer)
+                    buffer = _discard_until_possible_end(buffer, active_end_marker)
                     break
-                buffer = buffer[end_index + len(SCHEDULE_UPDATES_END):]
-                inside_schedule_updates = False
+                buffer = buffer[end_index + len(active_end_marker):]
+                active_end_marker = None
                 continue
 
-            start_index = buffer.find(SCHEDULE_UPDATES_START)
-            if start_index != -1:
+            control_start = _find_first_control_start(buffer)
+            if control_start is not None:
+                start_index, start_marker, end_marker = control_start
                 visible = buffer[:start_index]
                 if visible:
                     yield visible
-                buffer = buffer[start_index + len(SCHEDULE_UPDATES_START):]
-                inside_schedule_updates = True
+                buffer = buffer[start_index + len(start_marker):]
+                active_end_marker = end_marker
                 continue
 
             visible, buffer = _split_visible_prefix(buffer)
@@ -344,7 +498,7 @@ def iter_user_visible_chunks(chunks: Iterable[str]) -> Iterator[str]:
                 yield visible
             break
 
-    if buffer and not inside_schedule_updates:
+    if buffer and active_end_marker is None:
         yield buffer
 
 
@@ -378,14 +532,46 @@ def stream_chat_response(stream_id: str):
                 task="chat",
             )
         )
+        raw_chunks = []
+
+        def observed_chunks():
+            for chunk in response_source:
+                raw_chunks.append(chunk)
+                yield chunk
+
         chunks = []
-        for chunk in iter_user_visible_chunks(response_source):
+        for chunk in iter_user_visible_chunks(observed_chunks()):
             chunks.append(chunk)
             yield format_sse("delta", {"text": chunk})
 
+        raw_response = "".join(raw_chunks)
+        internal_actions_json = extract_internal_actions(raw_response)
         response_text = "".join(chunks)
         clean_response, _actions_json = strip_schedule_updates(response_text)
+        clean_response = strip_internal_actions(clean_response)
         assistant_id = memory.add_message("assistant", clean_response, scope=job.scope)
+
+        receipts = apply_chat_internal_actions(
+            internal_actions_json,
+            store,
+            memory,
+            job.scope,
+            job.user_message_id,
+            assistant_id,
+        )
+        for receipt in receipts:
+            receipt_text = receipt.get("message") or format_receipt(receipt)
+            receipt_id = memory.add_message(
+                "assistant",
+                receipt_text,
+                scope=job.scope,
+            )
+            yield format_sse("receipt", {
+                "text": receipt_text,
+                "message_id": receipt_id,
+                "step_id": receipt.get("step_id"),
+                "status": receipt.get("status"),
+            })
 
         try:
             check_and_summarize(memory, scope=job.scope)
@@ -397,8 +583,12 @@ def stream_chat_response(stream_id: str):
         yield format_sse("error", {"message": str(exc)})
 
 
-def render_suggestion_strip(request: Request):
+def render_suggestion_strip(
+    request: Request,
+    activity_receipt: str | None = None,
+):
     model = build_dashboard_model(get_store())
+    model["activity_receipt"] = activity_receipt
     return templates.TemplateResponse(
         request,
         "partials/suggestion_strip.html",
@@ -514,18 +704,27 @@ def create_chat_message(
     user_message_id = get_memory().add_message("user", cleaned, scope=scope)
 
     stream_id = uuid.uuid4().hex
-    _STREAM_JOBS[stream_id] = ChatStreamJob(scope=scope)
+    _STREAM_JOBS[stream_id] = ChatStreamJob(
+        scope=scope,
+        user_message_id=user_message_id,
+    )
     return {"stream_id": stream_id, "message_id": user_message_id}
 
 
 @router.post("/steps/{step_id}/accept")
 def accept_step(step_id: int, request: Request):
     try:
-        if not get_store().accept_step(step_id):
-            raise HTTPException(status_code=404, detail="Step not found")
+        receipt = record_step_status_change(
+            store=get_store(),
+            memory=get_memory(),
+            step_id=step_id,
+            status="accepted",
+            source="dashboard_ui",
+            actor=get_dashboard_persona(),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return render_suggestion_strip(request)
+    return render_suggestion_strip(request, format_receipt(receipt))
 
 
 @router.post("/steps/{step_id}/reject")
@@ -534,8 +733,46 @@ def reject_step(
     request: Request,
 ):
     try:
-        if not get_store().reject_step(step_id):
-            raise HTTPException(status_code=404, detail="Step not found")
+        receipt = record_step_status_change(
+            store=get_store(),
+            memory=get_memory(),
+            step_id=step_id,
+            status="rejected",
+            source="dashboard_ui",
+            actor=get_dashboard_persona(),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return render_suggestion_strip(request)
+    return render_suggestion_strip(request, format_receipt(receipt))
+
+
+@router.post("/steps/{step_id}/complete")
+def complete_step(step_id: int, request: Request):
+    try:
+        receipt = record_step_status_change(
+            store=get_store(),
+            memory=get_memory(),
+            step_id=step_id,
+            status="completed",
+            source="dashboard_ui",
+            actor=get_dashboard_persona(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return render_suggestion_strip(request, format_receipt(receipt))
+
+
+@router.post("/steps/{step_id}/abandon")
+def abandon_step(step_id: int, request: Request):
+    try:
+        receipt = record_step_status_change(
+            store=get_store(),
+            memory=get_memory(),
+            step_id=step_id,
+            status="abandoned",
+            source="dashboard_ui",
+            actor=get_dashboard_persona(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return render_suggestion_strip(request, format_receipt(receipt))

@@ -60,6 +60,23 @@ async function loadChatPanel(scopeType, scopeId) {
   setupChatHistory(document);
 }
 
+async function refreshStepsPanel() {
+  const target = document.querySelector("#steps-panel");
+  if (!target) {
+    return;
+  }
+
+  const response = await fetch("/partials/suggestions", {
+    headers: {
+      "HX-Request": "true",
+    },
+  });
+  if (!response.ok) {
+    return;
+  }
+  target.outerHTML = await response.text();
+}
+
 function escapeHtml(value) {
   return value
     .replaceAll("&", "&amp;")
@@ -326,6 +343,16 @@ async function submitChatForm(form) {
       if (button) {
         button.disabled = false;
       }
+    });
+
+    stream.addEventListener("receipt", (event) => {
+      const data = parseEventPayload(event);
+      if (data.text) {
+        const receiptMessage = createChatMessage("assistant", data.text, data.message_id);
+        stack.appendChild(receiptMessage);
+        stack.scrollTop = stack.scrollHeight;
+      }
+      refreshStepsPanel();
     });
 
     stream.addEventListener("error", (event) => {

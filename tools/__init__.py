@@ -31,6 +31,7 @@ def create_tools(
     tools["suggestions"] = SuggestionTool(
         store,
         created_by_persona=memory.persona_name,
+        memory=memory,
     )
     if send_fn is not None:
         tools["telegram"] = TelegramTool(send_fn)

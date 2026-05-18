@@ -360,6 +360,33 @@ class TestAgentOpportunities:
         assert opportunity["id"] == second_id
         assert opportunity["status"] == "dismissed"
 
+    def test_stale_accepted_step_scores_accountability_opportunity(self):
+        from accountability import refresh_accountability_opportunities
+        from goals import SharedGoalStore
+
+        store = SharedGoalStore(Path(self.tmpdir) / "user.db")
+        goal_id = store.create_goal("career", "Learn more about AI safety")
+        step_id = store.create_step(goal_id, "Read one alignment paper", status="accepted")
+        old_timestamp = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
+        conn = store._connect()
+        conn.execute(
+            """
+            UPDATE steps
+            SET accepted_at = ?, last_touched_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (old_timestamp, old_timestamp, old_timestamp, step_id),
+        )
+        conn.commit()
+        conn.close()
+
+        refresh_accountability_opportunities(self.memory, store)
+
+        opportunity = self.memory.list_agent_opportunities(kind="accountability_check")[0]
+        assert opportunity["step_id"] == step_id
+        assert opportunity["status"] == "queued"
+        assert opportunity["urgency"] >= 3
+
 
 class TestScheduleConfigMigration:
     def setup_method(self):

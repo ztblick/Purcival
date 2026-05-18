@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from accountability import record_step_status_change
 from goals import STEP_STATUSES, SharedGoalStore
+from memory import PersonaMemory
 from tools.base import Tool, ToolMethod
 
 
@@ -139,9 +141,11 @@ class SuggestionTool(Tool):
         self,
         store: SharedGoalStore | None = None,
         created_by_persona: str = "jo",
+        memory: PersonaMemory | None = None,
     ):
         self.store = store or SharedGoalStore()
         self.created_by_persona = created_by_persona
+        self.memory = memory
 
     def get_context(self) -> str | None:
         return self._format_recent_signal()
@@ -173,12 +177,33 @@ class SuggestionTool(Tool):
             ),
             ToolMethod(
                 name="update_status",
-                description="Update a step status and optionally add a short bookkeeping note.",
-                tier="observe",
+                description=(
+                    "Update a step status as a trusted internal write and "
+                    "record an event-backed receipt."
+                ),
+                tier="internal_write",
                 parameters={
                     "step_id": {"type": "int", "description": "Step id to update", "required": True},
                     "status": {"type": "str", "description": "New status: suggested, accepted, rejected, completed, or abandoned", "required": True},
                     "note": {"type": "str", "description": "Optional note to store with the update", "required": False},
+                },
+            ),
+            ToolMethod(
+                name="complete_step",
+                description="Mark an accepted step completed with an event-backed receipt.",
+                tier="internal_write",
+                parameters={
+                    "step_id": {"type": "int", "description": "Step id to complete", "required": True},
+                    "note": {"type": "str", "description": "Optional completion note", "required": False},
+                },
+            ),
+            ToolMethod(
+                name="abandon_step",
+                description="Mark an accepted step abandoned with an event-backed receipt.",
+                tier="internal_write",
+                parameters={
+                    "step_id": {"type": "int", "description": "Step id to abandon", "required": True},
+                    "note": {"type": "str", "description": "Optional reason or evidence", "required": False},
                 },
             ),
         ]
@@ -190,6 +215,18 @@ class SuggestionTool(Tool):
             return self._list_suggestions(**kwargs)
         if method_name == "update_status":
             return self._update_status(**kwargs)
+        if method_name == "complete_step":
+            return self._update_status(
+                step_id=kwargs["step_id"],
+                status="completed",
+                note=kwargs.get("note"),
+            )
+        if method_name == "abandon_step":
+            return self._update_status(
+                step_id=kwargs["step_id"],
+                status="abandoned",
+                note=kwargs.get("note"),
+            )
         raise ValueError(f"Unknown method '{method_name}' on SuggestionTool")
 
     def _propose_suggestion(
@@ -237,11 +274,16 @@ class SuggestionTool(Tool):
             choices = ", ".join(sorted(STEP_STATUSES))
             raise ValueError(f"Invalid status '{status}'. Expected one of: {choices}")
 
-        step_id = int(step_id)
-        if not self.store.update_step_status(step_id, status):
-            raise ValueError(f"Step {step_id} does not exist")
-        if note:
-            self.store.add_step_feedback(step_id, "freeform_note", note.strip())
+        receipt = record_step_status_change(
+            store=self.store,
+            memory=self.memory,
+            step_id=int(step_id),
+            status=status,
+            source="suggestion_tool",
+            actor=self.created_by_persona,
+            note=note,
+        )
+        step_id = receipt["step_id"]
         return f"Updated step #{step_id} to {status}"
 
     def _matches_existing_open_step(self, goal_id: int, title: str) -> bool:
