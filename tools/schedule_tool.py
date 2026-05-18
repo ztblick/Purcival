@@ -243,6 +243,7 @@ class ScheduleTool(Tool):
         tools = self._validate_tools(tools)
 
         context = json.dumps({
+            "job_type": "planning" if len(tools) == 0 else "targeted_action",
             "purpose": purpose,
             "tools": tools,
         })
@@ -279,6 +280,16 @@ class ScheduleTool(Tool):
             ctx["purpose"] = purpose
         if tools is not None:
             ctx["tools"] = self._validate_tools(tools)
+            ctx["job_type"] = (
+                "planning" if len(ctx["tools"]) == 0 else "targeted_action"
+            )
+        elif "job_type" not in ctx:
+            existing_tools = ctx.get("tools", [])
+            ctx["job_type"] = (
+                "planning"
+                if isinstance(existing_tools, list) and len(existing_tools) == 0
+                else "targeted_action"
+            )
 
         new_context = json.dumps(ctx)
 

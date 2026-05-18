@@ -8,10 +8,10 @@ agent sessions. Read it in full each session. Update sections marked
 
 ## Current focus                                          *updatable*
 
-**Last updated:** 2026-05-17
+**Last updated:** 2026-05-18
 **Active task:** Core agent reliability redesign
-**Phase:** Phase A — safety/instrumentation slice complete
-**Status:** The Goals dashboard task is closed as the primary development focus. Do not continue dashboard Phase 6 as previously scoped. The new primary focus is the plan in `Design/core_agent_reliability_redesign.md`: migrate the agent loop toward an event log, explicit job types, an opportunity queue, planner/policy/compiler separation, durable execution state, a dashboard delivery inbox, scoped capabilities, and an untrusted-content boundary before adding web/file/computer tools. Zach approved beginning Phase A implementation; the dashboard schedule-update streaming leak has been fixed locally as a safety bug, and trigger/schedule mutations now have explicit logging for investigation. No new production architecture has been added yet. Zach clarified that Purcival should have high autonomy over internal goals, steps, opportunities, dashboard cards, and inferred memory; the architecture should use receipts and correction paths rather than confirmation prompts for those internal writes.
+**Phase:** Phase B - event log and explicit jobs slice implemented
+**Status:** The Goals dashboard task is closed as the primary development focus. Do not continue dashboard Phase 6 as previously scoped. The new primary focus is the plan in `Design/core_agent_reliability_redesign.md`: migrate the agent loop toward an event log, explicit job types, an opportunity queue, planner/policy/compiler separation, durable execution state, a dashboard delivery inbox, scoped capabilities, and an untrusted-content boundary before adding web/file/computer tools. Phase A safety/instrumentation is complete. Zach approved beginning Phase B, and the first migration slice now adds per-persona `agent_events`, explicit `agent_jobs`, `job_type` metadata on new planning triggers, job leases/retries/completion receipts, and durable tool-observation events before reasoning. Zach clarified that Purcival should have high autonomy over internal goals, steps, opportunities, dashboard cards, and inferred memory; the architecture should use receipts and correction paths rather than confirmation prompts for those internal writes.
 
 ---
 
@@ -44,14 +44,13 @@ The core thesis:
 
 1. Read `Design/core_agent_reliability_redesign.md` in full.
 2. Review the Phase A implementation notes and keep the safety/instrumentation
-   work scoped: dashboard hidden controls are suppressed, trigger/schedule
-   instrumentation is logging only, and no new production architecture exists
-   yet.
-3. Before Phase B, tighten the event/job/opportunity schema decisions and
-   define the dashboard receipt/undo/correction UX for autonomous internal
-   writes.
-4. Next approval target: implement the smallest Phase B migration slice first,
-   event log plus explicit job type, preserving existing agent behavior.
+   work scoped: dashboard hidden controls are suppressed, and trigger/schedule
+   instrumentation remains logging-only around the old scheduler path.
+3. Review the Phase B implementation notes: this slice keeps triggers as the
+   low-level scheduler, layers `agent_jobs` over them, and writes tool
+   observations to `agent_events` before reasoning.
+4. Next approval target: Phase C opportunity queue, after Zach reviews whether
+   the Phase B compatibility layer feels like the right substrate.
 
 ### Phase A scope
 
@@ -213,7 +212,7 @@ suggestions and confirms they feel better-tuned.
 
 ## Open questions for Zach                               *updatable*
 
-- Before Phase B, one focused review remains: what exact
+- Before Phase D/E, one focused review remains: what exact
   receipt/undo/correction UX should the dashboard provide for autonomous
   internal writes such as created goals, modified goals, completed steps,
   abandoned steps, and learned memories?
@@ -222,7 +221,7 @@ suggestions and confirms they feel better-tuned.
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-- **Core agent redesign Phase B kickoff.** Phase A safety/instrumentation is complete. Zach answered the first design questions: Purcival should have high autonomy over internal goal/step/memory/dashboard state, chat remains the primary interaction surface, secure mobile access has no preferred mechanism, future file read scope can cover the main user directory excluding system/sensitive areas, overnight work is encouraged, and inferred memory does not need routine confirmation. Remaining approval target: begin Phase B's smallest migration slice: append-only `agent_events` plus explicit job type metadata while preserving existing agent behavior. Design doc: `Design/core_agent_reliability_redesign.md`.
+- **Core agent redesign Phase C kickoff.** Phase B's smallest event/job migration slice is implemented. Next decision target: whether to proceed to Phase C by adding `agent_opportunities` as the bridge between observations, internal writes, dashboard suggestions, and future delivery policy. Design doc: `Design/core_agent_reliability_redesign.md`.
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -237,6 +236,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-18 - Core agent reliability Phase B - added per-persona `agent_events`, explicit `agent_jobs`, `job_type` trigger metadata, job leasing/retry/completion receipts, and durable tool observation events before reasoning; focused Phase B tests and full pytest pass - committed.
 - 2026-05-17 - Core agent reliability Phase A - fixed dashboard SSE filtering so hidden `<schedule_updates>` control blocks cannot stream even across split chunks, added trigger/schedule mutation logging, documented Phase A implementation status, and verified the full pytest suite passes - committed.
 - 2026-05-17 - Project focus transition - marked the Goals dashboard as closed as the primary development task, made `Design/core_agent_reliability_redesign.md` the active design doc, instructed future sessions not to separately fix the dashboard schedule-update streaming leak, and prepared for a Phase A design-freeze handoff - awaiting final design freeze.
 - 2026-05-17 - Core agent reliability redesign - paused Goals dashboard Phase 6 for a design checkpoint and drafted `Design/core_agent_reliability_redesign.md`, then incorporated Zach's answers on internal autonomy, secure mobile access, broad future user-directory reads, overnight work, and trusted inferred memory; `pytest` and `python -m pytest` could not run because pytest is not installed in the active Python - awaiting revised architecture/receipt UX approval.
@@ -299,6 +299,8 @@ Append entries; never edit prior ones.
 - **2026-05-17 - Core agent redesign supersedes Goals dashboard Phase 6 as primary work.** The Goals dashboard is no longer the active project. Do not continue the old Phase 6 accountability plan or separately fix the dashboard schedule-update streaming leak unless Zach reopens it; the redesign may replace that control path.
 - **2026-05-17 - Phase A local leak fix suppresses old hidden schedule controls rather than applying them.** The dashboard now filters `<schedule_updates>` blocks before streaming or persisting focused chat responses. It intentionally does not execute those schedule actions from the dashboard; future state changes should use the redesigned event/action path with receipts.
 - **2026-05-17 - Phase A trigger instrumentation is logging, not the event log.** Schedule config changes, trigger mutations, planning-cycle reschedules, bulk trigger clears, and `ScheduleTool` mutations now write explicit logs for investigation. The durable append-only event substrate remains Phase B work.
+- **2026-05-18 - Phase B keeps jobs in per-persona memory DB first.** Triggers, reasoning logs, narrative state, and action logs already live in each persona's `memory.db`, so the first event/job substrate is colocated there. A shared/user-level event layer can be added later if cross-persona planning needs it.
+- **2026-05-18 - Explicit jobs layer over triggers before replacing them.** Phase B preserves the existing scheduler and trigger table, adds `agent_jobs` for job type, lease, retry, and completion state, and writes `job_type` into new trigger contexts. Legacy JSON triggers still work through fallback inference.
 
 ---
 

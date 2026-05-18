@@ -35,7 +35,7 @@ from datetime import datetime
 
 import brain
 import config
-from memory import PersonaMemory
+from memory import PersonaMemory, trigger_context_job_type
 from context import assemble_context, DEVICE_TELEGRAM
 from tools.base import Tool, ToolMethod
 from tools.telegram_tool import TelegramTool
@@ -353,6 +353,30 @@ def _cache_tool_contexts(memory: PersonaMemory, tool_contexts: dict[str, str]):
         logger.debug(f"Cached context for tool '{tool_name}' ({len(context)} chars)")
 
 
+def _record_tool_observation_events(
+    memory: PersonaMemory,
+    cycle_id: str,
+    trigger_id: int | None,
+    job_id: int,
+    job_type: str,
+    tool_contexts: dict[str, str],
+):
+    """Persist tool observations before reasoning so failures do not lose them."""
+    for tool_name, context in tool_contexts.items():
+        memory.add_agent_event(
+            event_type="tool_observation",
+            source=tool_name,
+            source_id=cycle_id,
+            payload={
+                "cycle_id": cycle_id,
+                "trigger_id": trigger_id,
+                "job_id": job_id,
+                "job_type": job_type,
+                "content": context,
+            },
+        )
+
+
 # --- The Agent Cycle ---
 
 async def run_agent_cycle(
@@ -383,8 +407,24 @@ async def run_agent_cycle(
     trigger_context = _parse_trigger_context(trigger)
     trigger_purpose = trigger_context.get("purpose", "Scheduled check-in")
     trigger_tools = trigger_context.get("tools", [])
+    job_type = trigger_context.get("job_type", "targeted_action")
     trigger_time = trigger.get("fire_at")
-    is_planning = len(trigger_tools) == 0
+    is_planning = job_type == "planning"
+    max_job_attempts = PLANNING_CYCLE_MAX_RETRIES if is_planning else 1
+    agent_job = memory.ensure_agent_job_for_trigger(
+        trigger=trigger,
+        job_type=job_type,
+        purpose=trigger_purpose,
+        tool_names=trigger_tools,
+        max_attempts=max_job_attempts,
+    )
+    if not memory.acquire_agent_job(agent_job["id"], lease_owner=cycle_id):
+        logger.warning(
+            "Cycle %s: agent job #%s is not available for leasing",
+            cycle_id,
+            agent_job["id"],
+        )
+        return False
 
     narrative_state = memory.get_narrative()
     schedule_config = memory.get_schedule_config()
@@ -416,6 +456,14 @@ async def run_agent_cycle(
                     logger.error(f"Tool '{name}' get_context() failed: {e}")
 
     _cache_tool_contexts(memory, tool_contexts)
+    _record_tool_observation_events(
+        memory=memory,
+        cycle_id=cycle_id,
+        trigger_id=trigger_id,
+        job_id=agent_job["id"],
+        job_type=job_type,
+        tool_contexts=tool_contexts,
+    )
 
     if "schedule" in tools:
         schedule_plan = tools["schedule"].get_context()
@@ -466,6 +514,7 @@ async def run_agent_cycle(
             skipped=True, skip_reason=f"LLM call failed: {e}",
             provider=config.DEFAULT_PROVIDER,
         )
+        memory.fail_agent_job(agent_job["id"], f"LLM call failed: {e}")
         _ensure_future_plan(memory, tools, schedule_config)
         return False
 
@@ -488,6 +537,10 @@ async def run_agent_cycle(
             narrative_in=narrative_state, llm_response=llm_response,
             skipped=True, skip_reason="Response truncated — missing required tags",
             provider=config.DEFAULT_PROVIDER,
+        )
+        memory.fail_agent_job(
+            agent_job["id"],
+            "Response truncated - missing required tags",
         )
         _ensure_future_plan(memory, tools, schedule_config)
         return False
@@ -611,6 +664,15 @@ async def run_agent_cycle(
         narrative_out=narrative_out, skipped=False,
         provider=config.DEFAULT_PROVIDER,
     )
+    memory.complete_agent_job(
+        agent_job["id"],
+        receipt={
+            "cycle_id": cycle_id,
+            "trigger_id": trigger_id,
+            "job_type": job_type,
+            "actions_taken": actions_taken,
+        },
+    )
 
     # --- Step 7: Ensure future plan exists ---
     _ensure_future_plan(memory, tools, schedule_config)
@@ -641,15 +703,28 @@ def _parse_trigger_context(trigger: dict) -> dict:
     """Parse a trigger's context field into a structured dict."""
     context_str = trigger.get("context", "")
     if not context_str:
-        return {"purpose": "Scheduled check-in", "tools": []}
+        return {
+            "purpose": "Scheduled check-in",
+            "tools": [],
+            "job_type": "planning",
+        }
     try:
         ctx = json.loads(context_str)
+        tools = ctx.get("tools", [])
+        if not isinstance(tools, list):
+            tools = []
+        job_type = ctx.get("job_type") or trigger_context_job_type(context_str)
         return {
             "purpose": ctx.get("purpose", "Scheduled check-in"),
-            "tools": ctx.get("tools", []),
+            "tools": tools,
+            "job_type": job_type or "targeted_action",
         }
     except (json.JSONDecodeError, TypeError):
-        return {"purpose": context_str, "tools": []}
+        return {
+            "purpose": context_str,
+            "tools": [],
+            "job_type": "planning",
+        }
 
 
 def _get_method_tier(tool: Tool | None, method_name: str) -> str:
@@ -687,6 +762,7 @@ def _ensure_future_plan(
             fire_at=tomorrow_start.strftime("%Y-%m-%d %H:%M:%S"),
             context=json.dumps({
                 "purpose": "Planning cycle — review all tools and plan the day",
+                "job_type": "planning",
                 "tools": [],
             }),
             recurring=None,
@@ -705,11 +781,7 @@ def _deduplicate_planning_cycles(memory: PersonaMemory):
     for trigger in active:
         if trigger["fire_at"] <= now_str:
             continue
-        try:
-            ctx = json.loads(trigger["context"]) if trigger["context"] else {}
-            if len(ctx.get("tools", [])) != 0:
-                continue
-        except (json.JSONDecodeError, TypeError):
+        if trigger_context_job_type(trigger.get("context")) != "planning":
             continue
         date = trigger["fire_at"][:10]
         if date not in by_date:

@@ -23,7 +23,7 @@ import logging
 from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from memory import PersonaMemory
+from memory import PersonaMemory, trigger_context_job_type
 from agent import run_agent_cycle, PLANNING_CYCLE_MAX_RETRIES
 from tools import create_tools
 
@@ -75,6 +75,7 @@ def ensure_agent_has_plan(memory: PersonaMemory):
         fire_at=next_time.strftime("%Y-%m-%d %H:%M:%S"),
         context=json.dumps({
             "purpose": "Planning cycle — review all tools and plan the day",
+            "job_type": "planning",
             "tools": [],
         }),
         recurring=None,
@@ -109,12 +110,7 @@ def start_scheduler(
         due = memory.get_due_triggers()
         for trigger in due:
             # Determine if this is a planning cycle (for retry logic)
-            is_planning = False
-            try:
-                ctx = json.loads(trigger.get("context", "{}"))
-                is_planning = len(ctx.get("tools", [])) == 0
-            except (json.JSONDecodeError, TypeError):
-                pass
+            is_planning = trigger_context_job_type(trigger.get("context")) == "planning"
 
             success = False
             attempts = 0

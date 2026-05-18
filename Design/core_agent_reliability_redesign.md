@@ -1,6 +1,6 @@
 # Core Agent Reliability Redesign
 
-**Status:** Phase A implementation started
+**Status:** Phase B event/job slice implemented
 **Date:** 2026-05-17
 **Scope:** reasoning, scheduling, action selection, learning, security, and proactive delivery
 
@@ -654,6 +654,26 @@ Acceptance:
 - Existing agent cycles still run.
 - A planning cycle is represented as `job_type='planning'`.
 - Observations are durable even if reasoning fails.
+
+Implementation notes:
+
+- Phase B uses the existing per-persona `memory.db`, because triggers,
+  reasoning logs, narrative state, and agent action logs already live there.
+  Shared/user-level events can be added later if cross-persona planning needs
+  them.
+- `agent_events` follows the proposed append-only shape: `event_type`,
+  `source`, optional `source_id`, `persona`, `payload_json`, timestamps,
+  `trust_level`, and optional `processed_at`.
+- `agent_jobs` is a compatibility layer over scheduler triggers rather than a
+  replacement scheduler. It stores `trigger_id`, `job_type`, `purpose`,
+  `tool_names_json`, optional `opportunity_id`, optional `delivery_policy`,
+  status, lease fields, attempt counts, timestamps, and `last_error`.
+- New planning triggers include `job_type='planning'`. Older JSON triggers with
+  `tools=[]` are still treated as planning cycles; plain-text legacy triggers
+  are not swept up by planning-cycle maintenance.
+- Tool contexts are written as `tool_observation` events before the reasoning
+  call. If reasoning fails or returns a truncated response, the job is marked
+  failed and the observations remain durable.
 
 ### Phase C - Opportunity queue
 

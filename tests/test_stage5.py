@@ -12,6 +12,7 @@ Tests cover:
 """
 
 import json
+import asyncio
 import logging
 import sys
 import tempfile
@@ -152,6 +153,140 @@ class TestReasoningLog:
         assert count == 1
 
 
+class TestAgentEvents:
+    def setup_method(self):
+        self.tmpdir = tempfile.mkdtemp()
+        with patch("memory.DATA_DIR", Path(self.tmpdir)):
+            self.memory = PersonaMemory("test_persona")
+
+    def test_add_agent_event(self):
+        event_id = self.memory.add_agent_event(
+            event_type="tool_observation",
+            source="goals",
+            source_id="cycle_001",
+            payload={"content": "Observed active goals."},
+        )
+        assert event_id > 0
+        events = self.memory.get_agent_events(event_type="tool_observation")
+        assert len(events) == 1
+        assert events[0]["source"] == "goals"
+        assert json.loads(events[0]["payload_json"])["content"] == "Observed active goals."
+
+    def test_observations_survive_reasoning_failure(self):
+        from agent import run_agent_cycle
+        from tools.base import Tool, ToolMethod
+
+        class MockTool(Tool):
+            name = "mock"
+            description = "Mock observation tool"
+            enabled = True
+
+            def get_context(self):
+                return "important observed state"
+
+            def get_methods(self):
+                return [
+                    ToolMethod(
+                        name="read",
+                        description="Read state",
+                        tier="observe",
+                    )
+                ]
+
+        trigger_id = self.memory.add_trigger(
+            "agent_cycle",
+            "2026-12-25 10:00:00",
+            context=json.dumps({
+                "job_type": "planning",
+                "purpose": "Test planning",
+                "tools": [],
+            }),
+        )
+        trigger = self.memory.get_trigger(trigger_id)
+
+        with patch("brain.ask", side_effect=RuntimeError("boom")):
+            result = asyncio.run(
+                run_agent_cycle(
+                    trigger=trigger,
+                    memory=self.memory,
+                    tools={"mock": MockTool()},
+                    persona_prompt="You are Jo.",
+                )
+            )
+
+        assert result is False
+        events = self.memory.get_agent_events(
+            event_type="tool_observation",
+            source="mock",
+        )
+        assert len(events) == 1
+        payload = json.loads(events[0]["payload_json"])
+        assert payload["content"] == "important observed state"
+        assert payload["job_type"] == "planning"
+
+        job = self.memory.get_agent_job_for_trigger(trigger_id)
+        assert job["status"] == "failed_retryable"
+
+
+class TestAgentJobs:
+    def setup_method(self):
+        self.tmpdir = tempfile.mkdtemp()
+        with patch("memory.DATA_DIR", Path(self.tmpdir)):
+            self.memory = PersonaMemory("test_persona")
+
+    def test_job_lease_retry_and_terminal_failure(self):
+        job_id = self.memory.add_agent_job(
+            job_type="planning",
+            purpose="Morning planning",
+            tool_names=["goals"],
+            max_attempts=2,
+        )
+
+        assert self.memory.acquire_agent_job(job_id, "cycle_1")
+        job = self.memory.get_agent_job(job_id)
+        assert job["status"] == "leased"
+        assert job["attempt_count"] == 1
+
+        assert not self.memory.acquire_agent_job(job_id, "cycle_2")
+        assert self.memory.fail_agent_job(job_id, "first failure") == "failed_retryable"
+
+        assert self.memory.acquire_agent_job(job_id, "cycle_2")
+        assert self.memory.fail_agent_job(job_id, "second failure") == "failed_terminal"
+        job = self.memory.get_agent_job(job_id)
+        assert job["status"] == "failed_terminal"
+        assert job["attempt_count"] == 2
+
+    def test_expired_lease_can_be_reacquired(self):
+        job_id = self.memory.add_agent_job(
+            job_type="targeted_action",
+            purpose="Follow up",
+            tool_names=["telegram"],
+        )
+
+        assert self.memory.acquire_agent_job(job_id, "cycle_1", lease_seconds=-1)
+        assert self.memory.acquire_agent_job(job_id, "cycle_2")
+        job = self.memory.get_agent_job(job_id)
+        assert job["lease_owner"] == "cycle_2"
+        assert job["attempt_count"] == 2
+
+    def test_complete_job_records_receipt_event(self):
+        job_id = self.memory.add_agent_job(
+            job_type="targeted_action",
+            purpose="Follow up",
+            tool_names=["telegram"],
+        )
+        assert self.memory.acquire_agent_job(job_id, "cycle_1")
+        self.memory.complete_agent_job(job_id, receipt={"cycle_id": "cycle_1"})
+
+        job = self.memory.get_agent_job(job_id)
+        assert job["status"] == "completed"
+        assert not self.memory.acquire_agent_job(job_id, "cycle_2")
+
+        events = self.memory.get_agent_events(event_type="job_completed")
+        assert len(events) == 1
+        assert events[0]["source_id"] == str(job_id)
+
+
 class TestScheduleConfigMigration:
     def setup_method(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -188,6 +323,18 @@ class TestTriggerOperations:
         trigger = self.memory.get_trigger(tid)
         assert trigger["fire_at"] == "2026-12-25 14:00:00"
         assert trigger["context"] == '{"purpose": "new"}'
+
+    def test_future_planning_cycle_uses_explicit_job_type(self):
+        self.memory.add_trigger(
+            "agent_cycle",
+            "2026-12-25 10:00:00",
+            json.dumps({
+                "job_type": "planning",
+                "purpose": "Planning with a focused tool list",
+                "tools": ["goals"],
+            }),
+        )
+        assert self.memory.has_future_planning_cycle()
 
     def test_delete_trigger_logs_snapshot(self):
         records = []
@@ -784,6 +931,8 @@ if __name__ == "__main__":
         TestAgentActions,
         TestAgentNarrative,
         TestReasoningLog,
+        TestAgentEvents,
+        TestAgentJobs,
         TestScheduleConfigMigration,
         TestTriggerOperations,
         TestJSONActionParsing,

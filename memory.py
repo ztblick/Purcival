@@ -56,6 +56,43 @@ def _truncate_log_value(value: str | None, limit: int = 240) -> str | None:
     return value[:limit] + "..."
 
 
+def _load_trigger_context_json(context: str | None) -> dict | None:
+    """Return a trigger's JSON context dict, or None for legacy text."""
+    if not context:
+        return {}
+    try:
+        decoded = json.loads(context)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def trigger_context_job_type(context: str | None) -> str | None:
+    """
+    Resolve a trigger context to a job type.
+
+    New triggers carry explicit job_type. Older JSON triggers are interpreted
+    compatibly: an empty tools list is a planning job, otherwise targeted.
+    Plain-text legacy triggers return None so maintenance code does not treat
+    them as planning cycles.
+    """
+    ctx = _load_trigger_context_json(context)
+    if ctx is None:
+        return None
+    explicit = ctx.get("job_type")
+    if explicit:
+        return str(explicit)
+    tools = ctx.get("tools", [])
+    if isinstance(tools, list) and len(tools) == 0:
+        return "planning"
+    return "targeted_action"
+
+
+def is_planning_trigger_context(context: str | None) -> bool:
+    """Return whether a trigger context represents a planning job."""
+    return trigger_context_job_type(context) == "planning"
+
+
 @dataclass(frozen=True)
 class MessageScope:
     """
@@ -247,6 +284,39 @@ class PersonaMemory:
                     created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS agent_events (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type      TEXT NOT NULL,
+                    source          TEXT NOT NULL,
+                    source_id       TEXT,
+                    persona         TEXT,
+                    payload_json    TEXT NOT NULL,
+                    occurred_at     TIMESTAMP NOT NULL,
+                    recorded_at     TIMESTAMP NOT NULL,
+                    trust_level     TEXT NOT NULL DEFAULT 'local',
+                    processed_at    TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_jobs (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trigger_id          INTEGER UNIQUE,
+                    job_type            TEXT NOT NULL,
+                    purpose             TEXT NOT NULL,
+                    tool_names_json     TEXT NOT NULL DEFAULT '[]',
+                    opportunity_id      INTEGER,
+                    delivery_policy     TEXT,
+                    status              TEXT NOT NULL DEFAULT 'pending',
+                    lease_owner         TEXT,
+                    lease_expires_at    TIMESTAMP,
+                    attempt_count       INTEGER NOT NULL DEFAULT 0,
+                    max_attempts        INTEGER NOT NULL DEFAULT 1,
+                    last_error          TEXT,
+                    created_at          TIMESTAMP NOT NULL,
+                    updated_at          TIMESTAMP NOT NULL,
+                    started_at          TIMESTAMP,
+                    completed_at        TIMESTAMP
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_messages_created
                     ON messages(created_at);
 
@@ -264,6 +334,18 @@ class PersonaMemory:
 
                 CREATE INDEX IF NOT EXISTS idx_reasoning_log_created
                     ON reasoning_log(created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_events_type_recorded
+                    ON agent_events(event_type, recorded_at);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_events_source
+                    ON agent_events(source, source_id);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_jobs_status
+                    ON agent_jobs(status, lease_expires_at);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_jobs_trigger
+                    ON agent_jobs(trigger_id);
             """)
             conn.commit()
         finally:
@@ -1011,9 +1093,7 @@ class PersonaMemory:
             ids_to_delete = []
             for row in rows:
                 try:
-                    ctx = json.loads(row["context"]) if row["context"] else {}
-                    tools = ctx.get("tools", [])
-                    if len(tools) == 0:
+                    if is_planning_trigger_context(row["context"]):
                         ids_to_delete.append(row["id"])
                 except (json.JSONDecodeError, TypeError):
                     # Legacy trigger or unparseable — leave it alone
@@ -1216,9 +1296,7 @@ class PersonaMemory:
                 continue  # Not in the future
 
             try:
-                ctx = json.loads(trigger["context"]) if trigger["context"] else {}
-                tools = ctx.get("tools", [])
-                if len(tools) == 0:
+                if is_planning_trigger_context(trigger["context"]):
                     return True  # Found a future planning cycle
             except (json.JSONDecodeError, TypeError):
                 continue
@@ -1353,6 +1431,319 @@ class PersonaMemory:
             conn.commit()
         finally:
             conn.close()
+
+    # --- Agent Events ---
+
+    def add_agent_event(
+        self,
+        event_type: str,
+        source: str,
+        payload: dict | list | str | int | float | bool | None,
+        source_id: str | None = None,
+        persona: str | None = None,
+        occurred_at: str | None = None,
+        trust_level: str = "local",
+        processed_at: str | None = None,
+    ) -> int:
+        """
+        Append one durable event to the agent event log.
+
+        The event log is intentionally append-only. Later phases can mark rows
+        processed, but should not rewrite the original observation payload.
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        payload_json = json.dumps(payload, ensure_ascii=True, sort_keys=True)
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO agent_events
+                    (event_type, source, source_id, persona, payload_json,
+                     occurred_at, recorded_at, trust_level, processed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_type,
+                    source,
+                    source_id,
+                    persona or self.persona_name,
+                    payload_json,
+                    occurred_at or now,
+                    now,
+                    trust_level,
+                    processed_at,
+                ),
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def get_agent_events(
+        self,
+        event_type: str | None = None,
+        source: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Return recent agent events, newest first."""
+        clauses = []
+        params: list = []
+        if event_type is not None:
+            clauses.append("event_type = ?")
+            params.append(event_type)
+        if source is not None:
+            clauses.append("source = ?")
+            params.append(source)
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(limit)
+
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT id, event_type, source, source_id, persona, payload_json,
+                       occurred_at, recorded_at, trust_level, processed_at
+                FROM agent_events
+                {where}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    # --- Agent Jobs ---
+
+    def add_agent_job(
+        self,
+        job_type: str,
+        purpose: str,
+        tool_names: list[str] | None = None,
+        trigger_id: int | None = None,
+        opportunity_id: int | None = None,
+        delivery_policy: str | None = None,
+        max_attempts: int = 1,
+    ) -> int:
+        """Create explicit job metadata for an agent wake-up."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO agent_jobs
+                    (trigger_id, job_type, purpose, tool_names_json,
+                     opportunity_id, delivery_policy, status, attempt_count,
+                     max_attempts, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+                """,
+                (
+                    trigger_id,
+                    job_type,
+                    purpose,
+                    json.dumps(tool_names or [], ensure_ascii=True),
+                    opportunity_id,
+                    delivery_policy,
+                    max(1, int(max_attempts)),
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def get_agent_job(self, job_id: int) -> dict | None:
+        """Return one agent job by id."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT id, trigger_id, job_type, purpose, tool_names_json,
+                       opportunity_id, delivery_policy, status, lease_owner,
+                       lease_expires_at, attempt_count, max_attempts,
+                       last_error, created_at, updated_at, started_at,
+                       completed_at
+                FROM agent_jobs
+                WHERE id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_agent_job_for_trigger(self, trigger_id: int) -> dict | None:
+        """Return the job metadata for a trigger, if it exists."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT id, trigger_id, job_type, purpose, tool_names_json,
+                       opportunity_id, delivery_policy, status, lease_owner,
+                       lease_expires_at, attempt_count, max_attempts,
+                       last_error, created_at, updated_at, started_at,
+                       completed_at
+                FROM agent_jobs
+                WHERE trigger_id = ?
+                """,
+                (trigger_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def ensure_agent_job_for_trigger(
+        self,
+        trigger: dict,
+        job_type: str,
+        purpose: str,
+        tool_names: list[str],
+        max_attempts: int = 1,
+    ) -> dict:
+        """Create or return the explicit job record for a scheduler trigger."""
+        trigger_id = trigger.get("id")
+        if trigger_id is None:
+            job_id = self.add_agent_job(
+                job_type=job_type,
+                purpose=purpose,
+                tool_names=tool_names,
+                max_attempts=max_attempts,
+            )
+            job = self.get_agent_job(job_id)
+            assert job is not None
+            return job
+
+        existing = self.get_agent_job_for_trigger(int(trigger_id))
+        if existing:
+            return existing
+
+        job_id = self.add_agent_job(
+            job_type=job_type,
+            purpose=purpose,
+            tool_names=tool_names,
+            trigger_id=int(trigger_id),
+            max_attempts=max_attempts,
+        )
+        job = self.get_agent_job(job_id)
+        assert job is not None
+        return job
+
+    def acquire_agent_job(
+        self,
+        job_id: int,
+        lease_owner: str,
+        lease_seconds: int = 300,
+    ) -> bool:
+        """
+        Lease a pending/retryable job.
+
+        A previously leased job can be acquired again after its lease expires,
+        which gives the scheduler a crash-safe recovery path.
+        """
+        now_dt = datetime.now()
+        now = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+        lease_until = (now_dt + timedelta(seconds=lease_seconds)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                UPDATE agent_jobs
+                SET status = 'leased',
+                    lease_owner = ?,
+                    lease_expires_at = ?,
+                    attempt_count = attempt_count + 1,
+                    started_at = COALESCE(started_at, ?),
+                    updated_at = ?
+                WHERE id = ?
+                  AND (
+                      status IN ('pending', 'failed_retryable')
+                      OR (status = 'leased' AND lease_expires_at < ?)
+                  )
+                """,
+                (lease_owner, lease_until, now, now, job_id, now),
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+        finally:
+            conn.close()
+
+    def complete_agent_job(self, job_id: int, receipt: dict | None = None):
+        """Mark a leased job completed and write a completion event."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE agent_jobs
+                SET status = 'completed',
+                    completed_at = ?,
+                    updated_at = ?,
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    last_error = NULL
+                WHERE id = ?
+                """,
+                (now, now, job_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        if receipt is not None:
+            self.add_agent_event(
+                event_type="job_completed",
+                source="agent_job",
+                source_id=str(job_id),
+                payload=receipt,
+            )
+
+    def fail_agent_job(
+        self,
+        job_id: int,
+        error: str,
+        retryable: bool = True,
+    ) -> str:
+        """Mark a job failed and return its resulting status."""
+        job = self.get_agent_job(job_id)
+        if job is None:
+            raise ValueError(f"Agent job #{job_id} not found")
+
+        if retryable and job["attempt_count"] < job["max_attempts"]:
+            status = "failed_retryable"
+        else:
+            status = "failed_terminal"
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE agent_jobs
+                SET status = ?,
+                    last_error = ?,
+                    updated_at = ?,
+                    lease_owner = NULL,
+                    lease_expires_at = NULL
+                WHERE id = ?
+                """,
+                (status, error, now, job_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        self.add_agent_event(
+            event_type="job_failed",
+            source="agent_job",
+            source_id=str(job_id),
+            payload={"error": error, "status": status, "retryable": retryable},
+        )
+        return status
 
     # --- Agent Actions ---
 

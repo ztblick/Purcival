@@ -324,6 +324,7 @@ def _handle_plan(memory: PersonaMemory, persona_name: str, persona_prompt: str):
         "fire_at": now.strftime("%Y-%m-%d %H:%M:%S"),
         "context": json.dumps({
             "purpose": "Manual planning cycle — review all tools and plan the day",
+            "job_type": "planning",
             "tools": [],
         }),
         "recurring": None,
