@@ -145,6 +145,7 @@ update AGENTS.md.)
 - Specific tests: `pytest path/to/test_file.py::test_name`
 - Terminal CLI: `python main.py [--persona jo] [--provider chatgpt|claude|ollama]`
 - Telegram service: currently inactive; do not rely on it without explicit setup work
+- To run tests, use the python interpreter in the virtual environment: `venv\Scripts\python.exe -m pytest`
 
 ---
 

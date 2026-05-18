@@ -52,22 +52,14 @@ The core thesis:
 4. Next approval target: Phase C opportunity queue, after Zach reviews whether
    the Phase B compatibility layer feels like the right substrate.
 
-### Phase A scope
-
-Do:
+### Do:
 
 - Treat `Design/core_agent_reliability_redesign.md` as the active design doc.
-- Prepare the repo for a fresh Codex handoff.
-- Clarify schema and migration boundaries.
-- Keep the dashboard streaming-control-tag fix scoped to local suppression of
-  the old hidden control channel.
-- Keep trigger/schedule instrumentation as logs until the Phase B event log
-  exists.
+- When finished, prepare the repo for a fresh Codex handoff.
 - Keep the Goals dashboard as supporting UI/state, not the active project.
 
-Do not:
+### Do not:
 
-- Continue Goals dashboard Phase 6 as previously written.
 - Add web search or local file search before the capability and untrusted
   content model is designed.
 - Add production code before the final design freeze is accepted.
