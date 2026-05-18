@@ -27,6 +27,19 @@ def cleanup():
         shutil.rmtree(TEST_DATA_DIR)
 
 
+def _reset_data_dir():
+    memory.DATA_DIR = TEST_DATA_DIR
+
+
+def setup_module():
+    cleanup()
+    _reset_data_dir()
+
+
+def teardown_module():
+    cleanup()
+
+
 def test_create_and_store_messages():
     """Test basic message storage and retrieval."""
     print("  test_create_and_store_messages...", end=" ")

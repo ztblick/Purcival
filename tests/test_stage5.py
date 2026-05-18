@@ -821,12 +821,12 @@ class TestScheduleTool:
             assert "Cancelled" in cancel_result
 
     def test_modify_wakeup(self):
-        future = (datetime.now() + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M")
         now = datetime.now()
         if 6 <= now.hour <= 21:
+            future = (now + timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M")
             result = self.tool.execute("add_wakeup", time=future, purpose="Original", tools=[])
             trigger_id = int(result.split("#")[1].split(" ")[0])
-            new_time = (datetime.now() + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M")
+            new_time = (now + timedelta(minutes=45)).strftime("%Y-%m-%d %H:%M")
             modify_result = self.tool.execute("modify_wakeup", id=trigger_id, time=new_time, purpose="Modified")
             assert "Modified" in modify_result
 

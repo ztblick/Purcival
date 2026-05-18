@@ -37,6 +37,19 @@ def cleanup():
         shutil.rmtree(TEST_DATA_DIR)
 
 
+def _reset_data_dir():
+    memory.DATA_DIR = TEST_DATA_DIR
+
+
+def setup_module():
+    cleanup()
+    _reset_data_dir()
+
+
+def teardown_module():
+    cleanup()
+
+
 def test_batch_selection_respects_budget():
     """_select_batch should take messages up to the token limit."""
     print("  test_batch_selection_respects_budget...", end=" ")

@@ -35,8 +35,24 @@ def cleanup():
         shutil.rmtree(TEST_DATA_DIR)
 
 
+def _reset_paths():
+    memory.DATA_DIR = TEST_DATA_DIR
+    context.DATA_DIR = TEST_DATA_DIR
+    context.USER_CONTEXT_PATH = TEST_DATA_DIR / "user_context.md"
+
+
+def setup_module():
+    cleanup()
+    _reset_paths()
+
+
+def teardown_module():
+    cleanup()
+
+
 def setup():
     """Create test data directory and user context."""
+    _reset_paths()
     TEST_DATA_DIR.mkdir(parents=True, exist_ok=True)
     context.USER_CONTEXT_PATH.write_text("Test user context.")
 

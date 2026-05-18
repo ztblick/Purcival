@@ -28,6 +28,19 @@ def cleanup():
         shutil.rmtree(TEST_DATA_DIR)
 
 
+def _reset_data_dir():
+    memory.DATA_DIR = TEST_DATA_DIR
+
+
+def setup_module():
+    cleanup()
+    _reset_data_dir()
+
+
+def teardown_module():
+    cleanup()
+
+
 def test_messages_survive_restart():
     """Simulate a process restart and verify messages persist."""
     print("  test_messages_survive_restart...", end=" ")

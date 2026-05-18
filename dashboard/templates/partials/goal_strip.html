@@ -4,6 +4,12 @@
       <p class="eyebrow">Purcival / Jo</p>
       <h1>{{ initial_title }}</h1>
     </div>
+    {% if dashboard_authenticated %}
+      <form class="session-form" action="/logout" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="session-button" type="submit">Log out</button>
+      </form>
+    {% endif %}
   </div>
 
   <div class="section-heading section-heading--compact">

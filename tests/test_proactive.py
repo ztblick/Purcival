@@ -29,6 +29,19 @@ def cleanup():
         shutil.rmtree(TEST_DATA_DIR)
 
 
+def _reset_data_dir():
+    memory.DATA_DIR = TEST_DATA_DIR
+
+
+def setup_module():
+    cleanup()
+    _reset_data_dir()
+
+
+def teardown_module():
+    cleanup()
+
+
 def test_add_and_retrieve_trigger():
     """Triggers should be stored and retrievable."""
     print("  test_add_and_retrieve_trigger...", end=" ")

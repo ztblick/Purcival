@@ -91,6 +91,18 @@ button:disabled {
   margin-bottom: 12px;
 }
 
+.session-form {
+  margin: 0;
+}
+
+.session-button {
+  border: 1px solid rgba(93, 247, 255, 0.28);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  color: var(--cyan);
+  background: rgba(93, 247, 255, 0.08);
+}
+
 .eyebrow {
   margin: 0 0 7px;
   color: var(--cyan);
@@ -214,6 +226,67 @@ h3 {
   color: rgba(242, 239, 231, 0.84);
   background: rgba(109, 255, 179, 0.08);
   font-size: 0.84rem;
+}
+
+.login-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 20px;
+}
+
+.login-panel {
+  display: grid;
+  gap: 16px;
+  width: min(460px, 100%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 28px 24px;
+  background: rgba(17, 16, 24, 0.92);
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: blur(16px);
+}
+
+.login-copy {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.login-error {
+  border: 1px solid rgba(255, 93, 115, 0.28);
+  border-radius: var(--radius);
+  padding: 12px;
+  color: var(--text);
+  background: rgba(255, 93, 115, 0.1);
+}
+
+.login-form {
+  display: grid;
+  gap: 12px;
+}
+
+.login-form label {
+  color: var(--cyan);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.login-form input {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+  color: var(--text);
+  background: rgba(5, 4, 9, 0.74);
+}
+
+.login-form button {
+  border: 1px solid rgba(109, 255, 179, 0.36);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  color: var(--green);
+  background: rgba(109, 255, 179, 0.08);
 }
 
 .goal-card,
@@ -713,6 +786,14 @@ h3 {
   .section-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .session-form {
+    width: 100%;
+  }
+
+  .session-button {
+    width: 100%;
   }
 
   h1 {

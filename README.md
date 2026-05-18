@@ -5,9 +5,10 @@ local tool and a systems-learning project. It runs on Zach's Windows PC with an
 RTX 3060, uses Jo as the active persona, persists long-term memory in SQLite,
 and can route LLM calls to Claude, ChatGPT, or a local Ollama model.
 
-The active development project is the **Goals dashboard**: a local web app for
-tracking Zach's goals, suggesting concrete next steps, and opening focused Jo
-chat threads about a goal or step.
+The active development project is the **core agent reliability redesign**. The
+dashboard now acts as Purcival's secure local control plane for goals, inbox
+cards, and focused Jo chats while the agent loop migrates to events, jobs,
+opportunities, receipts, and safer delivery paths.
 
 ## Current Status
 
@@ -26,7 +27,8 @@ Important current constraints:
 - Jo is the only persona currently in active use.
 - Telegram exists in code but is not currently operable.
 - Windows is the primary environment.
-- Background service setup on Windows is still TBD.
+- Dashboard mobile access is private-only: keep Uvicorn on loopback and put
+  Tailscale Serve plus dashboard auth in front of it.
 - Design docs live in `Design/`.
 
 ## Architecture
@@ -214,38 +216,46 @@ python -c "from google_auth import run_auth_flow; run_auth_flow('jo')"
 Credentials are stored under `data/jo/google_credentials.json` and are ignored
 by git.
 
-## Goals Dashboard
+## Dashboard
 
-Current phase: Phase 4 scoped goal/step chat complete; Phase 5 ready for the next development cycle.
-
-Canonical design doc:
+Active redesign docs:
 
 ```text
+Design/core_agent_reliability_redesign.md
 Design/dashboard_goals_design.md
 ```
 
-Planned implementation phases:
+Implemented dashboard slices:
 
-- Phase 1: shared data layer and scoped memory.
-- Phase 2: dashboard skeleton and visual identity.
-- Phase 3: real goal/step rendering and accept/reject flows.
-- Phase 4: scoped chat on goals and steps.
-- Phase 5: agent-generated suggestions.
-- Phase 6: accountability.
-- Phase 7: feedback-loop polish.
+- Shared goals/steps storage in `data/user.db`
+- Scoped goal/step chats backed by Jo's normal memory
+- Dashboard inbox cards for delivered suggestions and accountability checks
+- Event-backed accept/reject/done/abandon receipts
+- Signed-session dashboard auth with CSRF protection
+- Loopback-first runtime config for local, tailscale, or LAN fallback modes
 
-Phase 1 data storage and scoped memory are implemented. Phase 2 added the
-seed-backed FastAPI/Jinja dashboard skeleton and screenshot workflow. Phase 3
-added real goal/step rendering and accept/reject flows. Phase 4 added scoped
-Jo chats for goals and steps with Markdown rendering, provider-native SSE
-response delivery, and persistence in Jo's existing memory database.
+Generate a dashboard password hash once:
 
-Run the local dashboard:
+```powershell
+.\venv\Scripts\python.exe scripts\hash_dashboard_password.py
+```
+
+Add the resulting hash and a random secret to `.env`:
+
+```env
+PURCIVAL_DASHBOARD_PASSWORD_HASH=pbkdf2_sha256$...
+PURCIVAL_DASHBOARD_SECRET_KEY=replace-with-a-long-random-secret
+PURCIVAL_DASHBOARD_EXPOSURE=local
+PURCIVAL_DASHBOARD_HOST=127.0.0.1
+PURCIVAL_DASHBOARD_PORT=8000
+```
+
+Run the authenticated dashboard:
 
 ```powershell
 .\venv\Scripts\Activate.ps1
 python scripts\seed_dev_data.py --reset
-python -m uvicorn dashboard.app:app --reload
+python scripts\run_dashboard.py
 ```
 
 Then open:
@@ -253,6 +263,36 @@ Then open:
 ```text
 http://127.0.0.1:8000
 ```
+
+Log in with the password you hashed into `.env`.
+
+Run the non-Telegram background agent loop:
+
+```powershell
+python scripts\run_agent_loop.py --persona jo
+```
+
+For Windows Task Scheduler, point tasks at the wrapper scripts:
+
+```text
+scripts/start_dashboard.ps1
+scripts/start_agent_loop.ps1
+```
+
+Suggested task names:
+
+- `PurcivalDashboard`
+- `PurcivalAgentLoop`
+
+Each task should run as Zach's normal user account at logon with "run whether
+user is logged on or not" only if Zach wants background access while logged
+out. The PowerShell wrappers append stdout/stderr to `logs/`.
+
+For private phone access, keep the dashboard bound to `127.0.0.1` and use
+Tailscale Serve to expose that socket inside Zach's tailnet. Do not use
+Funnel, router port forwarding, or a public tunnel for this service. The exact
+Tailscale CLI commands still need local verification on Zach's Windows machine
+before they should be treated as canonical setup instructions.
 
 Capture dashboard screenshots:
 
@@ -293,6 +333,12 @@ The intended test runner is:
 pytest
 ```
 
+Use the venv interpreter from Windows:
+
+```powershell
+.\venv\Scripts\python.exe -m pytest
+```
+
 Live OpenAI, Google Calendar, and Ollama summarization tests are skipped by
 default during dashboard design work. To run them, set
 `PURCIVAL_RUN_LIVE_TESTS=1` and make sure the relevant credentials or local
@@ -300,7 +346,7 @@ services are available.
 
 ## Roadmap
 
-- Goals dashboard Phase 5 agent-generated suggestions tied to active goals.
-- Accountability context for accepted steps.
-- Feedback summaries to improve future suggestions.
-- Future reactivation or replacement of Telegram/mobile messaging.
+- Finish Phase E mobile verification on Zach's actual tailnet and phone.
+- Continue the event/job/opportunity redesign beyond the dashboard auth slice.
+- Add the untrusted-content boundary before web and local file tools.
+- Keep Telegram dormant unless Zach explicitly reopens it.

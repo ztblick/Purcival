@@ -1,5 +1,6 @@
-import os
 import json
+import os
+import re
 import socket
 import subprocess
 import sys
@@ -12,7 +13,14 @@ from fastapi.testclient import TestClient
 
 import memory
 from dashboard import routes
-from dashboard.app import app
+from dashboard.app import create_app
+from dashboard.auth import (
+    create_signed_session,
+    hash_dashboard_password,
+    verify_dashboard_password,
+    verify_signed_session,
+)
+from dashboard.config import DashboardConfigError, load_dashboard_config, validate_dashboard_config
 from dashboard.motivation import MOTIVATIONAL_TITLES, title_for_date
 from delivery import deliver_opportunity_to_inbox
 from goals import SharedGoalStore
@@ -20,15 +28,204 @@ from memory import MessageScope, PersonaMemory
 from scripts.seed_dev_data import seed_mockup_data
 
 ROOT = Path(__file__).resolve().parents[1]
+TEST_PASSWORD = "correct horse battery staple"
+TEST_SECRET = "0123456789abcdef0123456789abcdef"
+TEST_SALT = b"0123456789abcdef"
+
+
+def configure_dashboard_auth(monkeypatch, **overrides):
+    monkeypatch.setenv(
+        "PURCIVAL_DASHBOARD_PASSWORD_HASH",
+        hash_dashboard_password(TEST_PASSWORD, iterations=1_000, salt=TEST_SALT),
+    )
+    monkeypatch.setenv("PURCIVAL_DASHBOARD_SECRET_KEY", TEST_SECRET)
+    monkeypatch.setenv(
+        "PURCIVAL_DASHBOARD_EXPOSURE",
+        overrides.get("exposure", "local"),
+    )
+    monkeypatch.setenv(
+        "PURCIVAL_DASHBOARD_HOST",
+        overrides.get("host", "127.0.0.1"),
+    )
+    monkeypatch.setenv(
+        "PURCIVAL_DASHBOARD_PORT",
+        str(overrides.get("port", 8000)),
+    )
+    monkeypatch.setenv(
+        "PURCIVAL_DASHBOARD_SESSION_DAYS",
+        str(overrides.get("session_days", 30)),
+    )
+    public_base_url = overrides.get("public_base_url")
+    if public_base_url is None:
+        monkeypatch.delenv("PURCIVAL_DASHBOARD_PUBLIC_BASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("PURCIVAL_DASHBOARD_PUBLIC_BASE_URL", public_base_url)
+
+
+def configure_dashboard_env(monkeypatch, tmp_path, db_path):
+    configure_dashboard_auth(monkeypatch)
+    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
+    monkeypatch.setenv("PURCIVAL_MEMORY_DATA_DIR", str(tmp_path / "persona_data"))
+    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+
+
+def make_client(monkeypatch, tmp_path, db_path):
+    configure_dashboard_env(monkeypatch, tmp_path, db_path)
+    return TestClient(create_app())
+
+
+def login(client: TestClient, next_path: str = "/"):
+    response = client.post(
+        "/login",
+        data={"password": TEST_PASSWORD, "next": next_path},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    return response
+
+
+def extract_csrf_token(html: str) -> str:
+    match = re.search(r'<meta name="csrf-token" content="([^"]*)"', html)
+    assert match is not None
+    return match.group(1)
+
+
+def csrf_headers(client: TestClient, path: str = "/") -> dict[str, str]:
+    response = client.get(path)
+    assert response.status_code == 200
+    return {"X-CSRF-Token": extract_csrf_token(response.text)}
+
+
+def dashboard_url(path: str = "/") -> str:
+    return f"http://testserver{path}"
+
+
+def test_password_hash_round_trip_and_malformed_failure():
+    stored_hash = hash_dashboard_password(
+        TEST_PASSWORD,
+        iterations=1_000,
+        salt=TEST_SALT,
+    )
+
+    assert verify_dashboard_password(TEST_PASSWORD, stored_hash) is True
+    assert verify_dashboard_password("not-the-password", stored_hash) is False
+    assert verify_dashboard_password(TEST_PASSWORD, "pbkdf2_sha256$bad") is False
+
+
+def test_signed_sessions_reject_tampering_and_expiry():
+    token = create_signed_session(TEST_SECRET, session_days=30, now=100)
+    session = verify_signed_session(token, TEST_SECRET, now=200)
+    assert session is not None
+
+    tampered = token[:-1] + ("0" if token[-1] != "0" else "1")
+    assert verify_signed_session(tampered, TEST_SECRET, now=200) is None
+    assert verify_signed_session(token, TEST_SECRET, now=31 * 24 * 60 * 60 + 101) is None
+
+
+def test_dashboard_config_guards_unsafe_startup(monkeypatch):
+    configure_dashboard_auth(monkeypatch, exposure="local", host="0.0.0.0")
+    with pytest.raises(DashboardConfigError):
+        validate_dashboard_config(load_dashboard_config())
+
+    configure_dashboard_auth(monkeypatch, exposure="tailscale", host="127.0.0.1")
+    with pytest.raises(DashboardConfigError):
+        validate_dashboard_config(load_dashboard_config())
+
+    configure_dashboard_auth(
+        monkeypatch,
+        exposure="tailscale",
+        host="127.0.0.1",
+        public_base_url="https://purcival.tail123.ts.net",
+    )
+    validated = validate_dashboard_config(load_dashboard_config())
+    assert validated.secure_cookies is True
+
+
+def test_unauthenticated_routes_redirect_or_block(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    seed_mockup_data(SharedGoalStore(db_path))
+    configure_dashboard_env(monkeypatch, tmp_path, db_path)
+    client = TestClient(create_app())
+
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/login")
+
+    post_response = client.post("/steps/1/accept", follow_redirects=False)
+    assert post_response.status_code == 401
+
+    stream_response = client.get("/chat/streams/missing", follow_redirects=False)
+    assert stream_response.status_code == 401
+
+
+def test_login_logout_and_cookie_flags(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    seed_mockup_data(SharedGoalStore(db_path))
+    client = make_client(monkeypatch, tmp_path, db_path)
+
+    login_response = login(client)
+    cookie_header = login_response.headers.get("set-cookie", "")
+    assert "purcival_dashboard_session=" in cookie_header
+    assert "HttpOnly" in cookie_header
+    assert "samesite=lax" in cookie_header.lower()
+
+    logout_response = client.post(
+        "/logout",
+        headers=csrf_headers(client),
+        data={"csrf_token": extract_csrf_token(client.get("/").text)},
+        follow_redirects=False,
+    )
+    assert logout_response.status_code == 303
+    assert logout_response.headers["location"] == "/login"
+    redirected = client.get("/", follow_redirects=False)
+    assert redirected.status_code == 303
+
+
+def test_mutating_post_requires_csrf(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    client = make_client(monkeypatch, tmp_path, db_path)
+    login(client)
+
+    yoga_step = next(
+        step for step in store.list_steps(status="suggested")
+        if step["title"] == "Go to Yoga6 in Palo Alto at 12pm"
+    )
+    response = client.post(f"/steps/{yoga_step['id']}/accept", follow_redirects=False)
+    assert response.status_code == 403
+
+
+def test_actor_spoofing_is_rejected_by_verified_session(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    client = make_client(monkeypatch, tmp_path, db_path)
+    login(client)
+
+    yoga_step = next(
+        step for step in store.list_steps(status="suggested")
+        if step["title"] == "Go to Yoga6 in Palo Alto at 12pm"
+    )
+    headers = csrf_headers(client)
+    response = client.post(
+        f"/steps/{yoga_step['id']}/accept?actor=mallory",
+        headers={**headers, "X-Remote-User": "mallory", "X-Forwarded-User": "mallory"},
+    )
+    assert response.status_code == 200
+
+    event = PersonaMemory("jo").get_agent_events(event_type="step_accepted")[0]
+    payload = json.loads(event["payload_json"])
+    assert payload["actor"] == "zach_dashboard"
+    assert payload["actor_metadata"]["client_host"] == "testclient"
 
 
 def test_dashboard_renders_seeded_goals(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     seed_mockup_data(SharedGoalStore(db_path))
-    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
-    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+    client = make_client(monkeypatch, tmp_path, db_path)
+    login(client)
 
-    client = TestClient(app)
     response = client.get("/")
 
     assert response.status_code == 200
@@ -49,10 +246,8 @@ def test_dashboard_renders_seeded_goals(tmp_path, monkeypatch):
 def test_dashboard_partials_render(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     seed_mockup_data(SharedGoalStore(db_path))
-    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
-    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
-
-    client = TestClient(app)
+    client = make_client(monkeypatch, tmp_path, db_path)
+    login(client)
 
     goals_response = client.get("/partials/goals")
     suggestions_response = client.get("/partials/suggestions")
@@ -74,8 +269,7 @@ def test_scoped_chat_panel_loads_step_history(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)
     seed_mockup_data(store)
-    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
-    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+    configure_dashboard_env(monkeypatch, tmp_path, db_path)
 
     step = next(
         row for row in store.list_steps(status="suggested")
@@ -86,7 +280,8 @@ def test_scoped_chat_panel_loads_step_history(tmp_path, monkeypatch):
     mem.add_message("user", "Can we make this fit after school?", scope=scope)
     mem.add_message("assistant", "Yes. Let's narrow the time window.", scope=scope)
 
-    client = TestClient(app)
+    client = TestClient(create_app())
+    login(client)
     response = client.get(f"/chat/step/{step['id']}")
 
     assert response.status_code == 200
@@ -105,8 +300,7 @@ def test_scoped_chat_messages_can_page_older_history(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)
     seed_mockup_data(store)
-    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
-    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+    configure_dashboard_env(monkeypatch, tmp_path, db_path)
 
     step = next(
         row for row in store.list_steps(status="suggested")
@@ -117,7 +311,8 @@ def test_scoped_chat_messages_can_page_older_history(tmp_path, monkeypatch):
     for index in range(25):
         mem.add_message("user", f"Scoped message {index}", scope=scope)
 
-    client = TestClient(app)
+    client = TestClient(create_app())
+    login(client)
     recent_response = client.get(f"/chat/step/{step['id']}/messages?limit=20")
     assert recent_response.status_code == 200
     recent_payload = recent_response.json()
@@ -141,8 +336,7 @@ def test_scoped_chat_panel_loads_goal_history(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)
     seed_mockup_data(store)
-    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
-    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+    configure_dashboard_env(monkeypatch, tmp_path, db_path)
 
     goal = next(
         row for row in store.list_goals(status="active")
@@ -152,7 +346,8 @@ def test_scoped_chat_panel_loads_goal_history(tmp_path, monkeypatch):
     mem = PersonaMemory("jo")
     mem.add_message("user", "Let's rethink this goal.", scope=scope)
 
-    client = TestClient(app)
+    client = TestClient(create_app())
+    login(client)
     response = client.get(f"/chat/goal/{goal['id']}")
 
     assert response.status_code == 200
@@ -165,8 +360,7 @@ def test_scoped_chat_stream_persists_without_default_leak(tmp_path, monkeypatch)
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)
     seed_mockup_data(store)
-    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
-    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+    configure_dashboard_env(monkeypatch, tmp_path, db_path)
     monkeypatch.setattr(routes.personas, "load_persona", lambda name: "You are Jo.")
     monkeypatch.setattr(routes, "check_and_summarize", lambda *args, **kwargs: 0)
 
@@ -185,9 +379,11 @@ def test_scoped_chat_stream_persists_without_default_leak(tmp_path, monkeypatch)
         if row["title"] == "Go to Yoga6 in Palo Alto at 12pm"
     )
 
-    client = TestClient(app)
+    client = TestClient(create_app())
+    login(client)
     post_response = client.post(
         f"/chat/step/{step['id']}/messages",
+        headers=csrf_headers(client),
         data={"message": "How should I think about this?"},
     )
     assert post_response.status_code == 200
@@ -216,8 +412,7 @@ def test_scoped_chat_stream_suppresses_schedule_updates(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)
     seed_mockup_data(store)
-    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
-    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+    configure_dashboard_env(monkeypatch, tmp_path, db_path)
     monkeypatch.setattr(routes.personas, "load_persona", lambda name: "You are Jo.")
     monkeypatch.setattr(routes, "check_and_summarize", lambda *args, **kwargs: 0)
 
@@ -237,9 +432,11 @@ def test_scoped_chat_stream_suppresses_schedule_updates(tmp_path, monkeypatch):
         if row["title"] == "Go to Yoga6 in Palo Alto at 12pm"
     )
 
-    client = TestClient(app)
+    client = TestClient(create_app())
+    login(client)
     post_response = client.post(
         f"/chat/step/{step['id']}/messages",
+        headers=csrf_headers(client),
         data={"message": "Please adjust the plan."},
     )
     assert post_response.status_code == 200
@@ -263,8 +460,7 @@ def test_scoped_chat_stream_applies_internal_step_receipt(tmp_path, monkeypatch)
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)
     seed_mockup_data(store)
-    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
-    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+    configure_dashboard_env(monkeypatch, tmp_path, db_path)
     monkeypatch.setattr(routes.personas, "load_persona", lambda name: "You are Jo.")
     monkeypatch.setattr(routes, "check_and_summarize", lambda *args, **kwargs: 0)
 
@@ -290,9 +486,11 @@ def test_scoped_chat_stream_applies_internal_step_receipt(tmp_path, monkeypatch)
 
     monkeypatch.setattr(routes.brain, "stream", fake_stream)
 
-    client = TestClient(app)
+    client = TestClient(create_app())
+    login(client)
     post_response = client.post(
         f"/chat/step/{step['id']}/messages",
+        headers=csrf_headers(client),
         data={"message": "Actually, this class does not fit anymore."},
     )
     assert post_response.status_code == 200
@@ -312,16 +510,16 @@ def test_scoped_chat_stream_applies_internal_step_receipt(tmp_path, monkeypatch)
     assert scoped_messages[-1]["content"].startswith("Receipt: abandoned")
     assert payload["previous_status"] == "accepted"
     assert payload["related_message_ids"]
+    assert payload["actor"] == "zach_dashboard"
 
 
 def test_step_accept_and_reject_routes(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)
     seed_mockup_data(store)
-    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
-    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+    client = make_client(monkeypatch, tmp_path, db_path)
+    login(client)
 
-    client = TestClient(app)
     yoga_step = next(
         step for step in store.list_steps(status="suggested")
         if step["title"] == "Go to Yoga6 in Palo Alto at 12pm"
@@ -331,13 +529,14 @@ def test_step_accept_and_reject_routes(tmp_path, monkeypatch):
         if step["title"] == "Continue learning about LucidAI and their tech"
     )
 
-    accept_response = client.post(f"/steps/{yoga_step['id']}/accept")
+    headers = csrf_headers(client)
+    accept_response = client.post(f"/steps/{yoga_step['id']}/accept", headers=headers)
     assert accept_response.status_code == 200
     assert "step-card--accepted" in accept_response.text
     assert "Receipt:" in accept_response.text
     assert SharedGoalStore(db_path).get_step(yoga_step["id"])["status"] == "accepted"
 
-    reject_response = client.post(f"/steps/{lucid_step['id']}/reject")
+    reject_response = client.post(f"/steps/{lucid_step['id']}/reject", headers=headers)
     assert reject_response.status_code == 200
 
     refreshed_store = SharedGoalStore(db_path)
@@ -354,8 +553,8 @@ def test_step_complete_and_abandon_routes_write_receipts(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)
     seed_mockup_data(store)
-    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
-    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+    client = make_client(monkeypatch, tmp_path, db_path)
+    login(client)
 
     accepted_step_id = store.create_step(
         goal_id=store.list_goals(status="active")[0]["id"],
@@ -368,9 +567,9 @@ def test_step_complete_and_abandon_routes_write_receipts(tmp_path, monkeypatch):
         status="accepted",
     )
 
-    client = TestClient(app)
-    complete_response = client.post(f"/steps/{accepted_step_id}/complete")
-    abandon_response = client.post(f"/steps/{abandoned_step_id}/abandon")
+    headers = csrf_headers(client)
+    complete_response = client.post(f"/steps/{accepted_step_id}/complete", headers=headers)
+    abandon_response = client.post(f"/steps/{abandoned_step_id}/abandon", headers=headers)
 
     refreshed_store = SharedGoalStore(db_path)
     mem = PersonaMemory("jo")
@@ -389,8 +588,7 @@ def test_dashboard_renders_and_acts_on_inbox_card(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)
     seed_mockup_data(store)
-    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
-    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+    configure_dashboard_env(monkeypatch, tmp_path, db_path)
 
     mem = PersonaMemory("jo")
     goal = next(goal for goal in store.list_goals(status="active"))
@@ -417,7 +615,8 @@ def test_dashboard_renders_and_acts_on_inbox_card(tmp_path, monkeypatch):
     opportunity = mem.get_agent_opportunity(opportunity_id)
     deliver_opportunity_to_inbox(mem, store, opportunity)
 
-    client = TestClient(app)
+    client = TestClient(create_app())
+    login(client)
     response = client.get("/")
     assert response.status_code == 200
     assert "Inbox" in response.text
@@ -425,7 +624,10 @@ def test_dashboard_renders_and_acts_on_inbox_card(tmp_path, monkeypatch):
     assert "Open chat" in response.text
 
     item = mem.list_agent_inbox_items()[0]
-    accept_response = client.post(f"/inbox/{item['id']}/accept")
+    accept_response = client.post(
+        f"/inbox/{item['id']}/accept",
+        headers=csrf_headers(client),
+    )
     refreshed_mem = PersonaMemory("jo")
 
     assert accept_response.status_code == 200
@@ -439,8 +641,7 @@ def test_dashboard_can_snooze_inbox_card(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)
     seed_mockup_data(store)
-    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
-    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+    configure_dashboard_env(monkeypatch, tmp_path, db_path)
 
     mem = PersonaMemory("jo")
     item_id = mem.add_agent_inbox_item(
@@ -451,8 +652,12 @@ def test_dashboard_can_snooze_inbox_card(tmp_path, monkeypatch):
         actions=[{"type": "snooze", "label": "Snooze"}],
     )
 
-    client = TestClient(app)
-    response = client.post(f"/inbox/{item_id}/snooze")
+    client = TestClient(create_app())
+    login(client)
+    response = client.post(
+        f"/inbox/{item_id}/snooze",
+        headers=csrf_headers(client),
+    )
 
     refreshed = PersonaMemory("jo")
     assert response.status_code == 200
@@ -480,12 +685,35 @@ def wait_for_server(url: str, process: subprocess.Popen, timeout_seconds: float 
         if process.poll() is not None:
             raise RuntimeError("Dashboard server exited before it became ready.")
         try:
-            response = requests.get(url, timeout=0.5)
-            if response.status_code == 200:
+            response = requests.get(url, timeout=0.5, allow_redirects=False)
+            if response.status_code in {200, 303}:
                 return
         except requests.RequestException:
             time.sleep(0.2)
     raise TimeoutError(f"Dashboard server did not become ready at {url}")
+
+
+def dashboard_subprocess_env(tmp_path, db_path, **extra):
+    env = os.environ.copy()
+    env["PURCIVAL_GOALS_DB"] = str(db_path)
+    env["PURCIVAL_MEMORY_DATA_DIR"] = str(tmp_path / "persona_data")
+    env["PURCIVAL_DASHBOARD_PASSWORD_HASH"] = hash_dashboard_password(
+        TEST_PASSWORD,
+        iterations=1_000,
+        salt=TEST_SALT,
+    )
+    env["PURCIVAL_DASHBOARD_SECRET_KEY"] = TEST_SECRET
+    env["PURCIVAL_DASHBOARD_EXPOSURE"] = "local"
+    env["PURCIVAL_DASHBOARD_HOST"] = "127.0.0.1"
+    env["PYTHONPATH"] = str(ROOT)
+    for key, value in extra.items():
+        env[key] = value
+    return env
+
+
+def playwright_login(page):
+    page.get_by_label("Password").fill(TEST_PASSWORD)
+    page.get_by_role("button", name="Unlock Dashboard").click()
 
 
 def test_playwright_accept_reject_flow(tmp_path):
@@ -508,10 +736,7 @@ def test_playwright_accept_reject_flow(tmp_path):
 
     port = find_free_port()
     url = f"http://127.0.0.1:{port}/"
-    env = os.environ.copy()
-    env["PURCIVAL_GOALS_DB"] = str(db_path)
-    env["PURCIVAL_MEMORY_DATA_DIR"] = str(tmp_path / "persona_data")
-    env["PYTHONPATH"] = str(ROOT)
+    env = dashboard_subprocess_env(tmp_path, db_path)
     server = subprocess.Popen(
         [
             sys.executable,
@@ -544,6 +769,8 @@ def test_playwright_accept_reject_flow(tmp_path):
             try:
                 page = browser.new_page(viewport={"width": 1280, "height": 900})
                 page.goto(url, wait_until="networkidle")
+                playwright_login(page)
+                expect(page).to_have_url(re.compile(r"/$"))
 
                 page.locator(
                     f'[data-step-id="{yoga_step["id"]}"] .decision-button--accept'
@@ -589,11 +816,12 @@ def test_playwright_scoped_chat_flow(tmp_path, monkeypatch):
 
     port = find_free_port()
     url = f"http://127.0.0.1:{port}/"
-    env = os.environ.copy()
-    env["PURCIVAL_GOALS_DB"] = str(db_path)
-    env["PURCIVAL_MEMORY_DATA_DIR"] = str(memory_dir)
-    env["PURCIVAL_DASHBOARD_FAKE_RESPONSE"] = "**Scoped** Playwright response."
-    env["PYTHONPATH"] = str(ROOT)
+    env = dashboard_subprocess_env(
+        tmp_path,
+        db_path,
+        PURCIVAL_MEMORY_DATA_DIR=str(memory_dir),
+        PURCIVAL_DASHBOARD_FAKE_RESPONSE="**Scoped** Playwright response.",
+    )
     server = subprocess.Popen(
         [
             sys.executable,
@@ -626,6 +854,8 @@ def test_playwright_scoped_chat_flow(tmp_path, monkeypatch):
             try:
                 page = browser.new_page(viewport={"width": 1280, "height": 900})
                 page.goto(url, wait_until="networkidle")
+                playwright_login(page)
+                expect(page).to_have_url(re.compile(r"/$"))
                 page.locator(f'[data-step-id="{step["id"]}"]').click(position={"x": 20, "y": 20})
                 expect(page.locator(".chat-panel")).to_have_attribute(
                     "data-chat-scope-id",

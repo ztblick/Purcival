@@ -63,6 +63,7 @@
         action="/chat/{{ chat_context.scope_type }}/{{ chat_context.scope_id }}/messages"
       {% endif %}
     >
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label for="chat-message">Message Jo</label>
       <div class="composer__input-row">
         <textarea id="chat-message" name="message" rows="3" {% if not chat_context %}disabled{% endif %}></textarea>

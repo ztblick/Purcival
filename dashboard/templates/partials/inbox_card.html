@@ -9,21 +9,25 @@
   <div class="inbox-actions" aria-label="Inbox actions">
     {% if "accept_step" in item.action_types %}
       <form hx-post="/inbox/{{ item.id }}/accept" hx-target="#steps-panel" hx-swap="outerHTML">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="inbox-button inbox-button--primary" type="submit">Accept</button>
       </form>
     {% endif %}
     {% if "reject_step" in item.action_types %}
       <form hx-post="/inbox/{{ item.id }}/reject" hx-target="#steps-panel" hx-swap="outerHTML">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="inbox-button" type="submit">Reject</button>
       </form>
     {% endif %}
     {% if "complete_step" in item.action_types %}
       <form hx-post="/inbox/{{ item.id }}/complete" hx-target="#steps-panel" hx-swap="outerHTML">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="inbox-button inbox-button--primary" type="submit">Done</button>
       </form>
     {% endif %}
     {% if "abandon_step" in item.action_types %}
       <form hx-post="/inbox/{{ item.id }}/abandon" hx-target="#steps-panel" hx-swap="outerHTML">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="inbox-button" type="submit">Abandon</button>
       </form>
     {% endif %}
@@ -37,10 +41,12 @@
     {% endif %}
     {% if "snooze" in item.action_types %}
       <form hx-post="/inbox/{{ item.id }}/snooze" hx-target="#steps-panel" hx-swap="outerHTML">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="inbox-button" type="submit">Snooze</button>
       </form>
     {% endif %}
     <form hx-post="/inbox/{{ item.id }}/dismiss" hx-target="#steps-panel" hx-swap="outerHTML">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="inbox-button" type="submit">Dismiss</button>
     </form>
   </div>

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}Purcival Login{% endblock %}
+
+{% block body %}
+<main class="login-shell">
+  <section class="login-panel">
+    <p class="eyebrow">Purcival / Secure Access</p>
+    <h1>Dashboard Login</h1>
+    <p class="login-copy">This dashboard exposes Purcival's private goals, inbox cards, and focused Jo chats. Sign in before continuing.</p>
+
+    {% if error_message %}
+      <div class="login-error" role="alert">{{ error_message }}</div>
+    {% endif %}
+
+    <form class="login-form" action="/login" method="post">
+      <input type="hidden" name="next" value="{{ next_path }}">
+      <label for="dashboard-password">Password</label>
+      <input id="dashboard-password" name="password" type="password" autocomplete="current-password" required autofocus>
+      <button type="submit">Unlock Dashboard</button>
+    </form>
+  </section>
+</main>
+{% endblock %}

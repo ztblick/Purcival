@@ -10,6 +10,35 @@ function formDataForTrigger(trigger) {
   return formData;
 }
 
+function csrfToken() {
+  return document.querySelector('meta[name="csrf-token"]')?.content || "";
+}
+
+function authAwareHeaders(extraHeaders = {}) {
+  const headers = { ...extraHeaders };
+  const token = csrfToken();
+  if (token) {
+    headers["X-CSRF-Token"] = token;
+  }
+  return headers;
+}
+
+function redirectToLoginIfNeeded(response) {
+  if (!response.redirected) {
+    return false;
+  }
+  try {
+    const url = new URL(response.url);
+    if (url.pathname === "/login") {
+      window.location.assign(response.url);
+      return true;
+    }
+  } catch (_error) {
+    return false;
+  }
+  return false;
+}
+
 async function sendHtmxRequest(trigger) {
   const url = trigger.getAttribute("hx-post");
   const targetSelector = trigger.getAttribute("hx-target");
@@ -23,11 +52,14 @@ async function sendHtmxRequest(trigger) {
   const response = await fetch(url, {
     method: "POST",
     body: formDataForTrigger(trigger),
-    headers: {
+    headers: authAwareHeaders({
       "HX-Request": "true",
-    },
+    }),
   });
 
+  if (redirectToLoginIfNeeded(response)) {
+    return;
+  }
   if (!response.ok) {
     return;
   }
@@ -47,10 +79,13 @@ async function loadChatPanel(scopeType, scopeId) {
   }
 
   const response = await fetch(`/chat/${scopeType}/${scopeId}`, {
-    headers: {
+    headers: authAwareHeaders({
       "HX-Request": "true",
-    },
+    }),
   });
+  if (redirectToLoginIfNeeded(response)) {
+    return;
+  }
   if (!response.ok) {
     return;
   }
@@ -67,10 +102,13 @@ async function refreshStepsPanel() {
   }
 
   const response = await fetch("/partials/suggestions", {
-    headers: {
+    headers: authAwareHeaders({
       "HX-Request": "true",
-    },
+    }),
   });
+  if (redirectToLoginIfNeeded(response)) {
+    return;
+  }
   if (!response.ok) {
     return;
   }
@@ -231,7 +269,11 @@ async function loadOlderMessages(stack) {
   try {
     const response = await fetch(
       `/chat/${scopeType}/${scopeId}/messages?before_id=${beforeId}&limit=20`,
+      { headers: authAwareHeaders() },
     );
+    if (redirectToLoginIfNeeded(response)) {
+      return;
+    }
     if (!response.ok) {
       return;
     }
@@ -308,7 +350,11 @@ async function submitChatForm(form) {
     const response = await fetch(form.action, {
       method: "POST",
       body: formData,
+      headers: authAwareHeaders(),
     });
+    if (redirectToLoginIfNeeded(response)) {
+      return;
+    }
     if (!response.ok) {
       throw new Error("Message failed");
     }
@@ -359,6 +405,9 @@ async function submitChatForm(form) {
       const data = event.data ? parseEventPayload(event) : {};
       if (data.message) {
         renderMarkdownInto(assistantMessage, data.message);
+      }
+      if (!assistantMarkdown) {
+        window.location.assign("/login");
       }
       stream.close();
       if (textarea) {

@@ -18,6 +18,7 @@
         hx-target="#steps-panel"
         hx-swap="outerHTML"
       >
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="decision-button decision-button--accept" type="submit" title="Accept step" aria-label="Accept {{ step.title }}">&#10003;</button>
       </form>
       <form
@@ -26,6 +27,7 @@
         hx-target="#steps-panel"
         hx-swap="outerHTML"
       >
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="decision-button decision-button--reject" type="submit" title="Reject step" aria-label="Reject {{ step.title }}">&#10005;</button>
       </form>
     </div>
@@ -36,6 +38,7 @@
         hx-target="#steps-panel"
         hx-swap="outerHTML"
       >
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="decision-button decision-button--accept" type="submit" title="Mark done" aria-label="Mark {{ step.title }} done">&#10003;</button>
       </form>
       <form
@@ -43,6 +46,7 @@
         hx-target="#steps-panel"
         hx-swap="outerHTML"
       >
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="decision-button decision-button--reject" type="submit" title="Abandon step" aria-label="Abandon {{ step.title }}">&#10005;</button>
       </form>
     </div>

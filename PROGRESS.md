@@ -10,8 +10,8 @@ agent sessions. Read it in full each session. Update sections marked
 
 **Last updated:** 2026-05-18
 **Active task:** Core agent reliability redesign
-**Phase:** Phase E - security/access design drafted
-**Status:** The Goals dashboard task is closed as the primary development focus. Do not continue dashboard Phase 6 as previously scoped. The new primary focus is the plan in `Design/core_agent_reliability_redesign.md`: migrate the agent loop toward an event log, explicit job types, an opportunity queue, planner/policy/compiler separation, durable execution state, a dashboard delivery inbox, scoped capabilities, and an untrusted-content boundary before adding web/file/computer tools. Phase A safety/instrumentation is complete. Phase B added per-persona `agent_events`, explicit `agent_jobs`, `job_type` metadata on new planning triggers, job leases/retries/completion receipts, and durable tool-observation events before reasoning. Phase C added per-persona `agent_opportunities`, registered `OpportunityTool`, routed planning-cycle step suggestions through `opportunities.propose_goal_step`, created dashboard-visible suggested steps only after recording a delivered opportunity, and suppressed dismissed/rejected/blocked duplicate opportunities. Phase D added shared event-backed accountability receipts for step accept/reject/complete/abandon, scored `accountability_check` opportunities, trusted internal `SuggestionTool` writes, and narrow focused-chat completion/abandonment receipts. Phase E first added the local delivery-inbox slice: per-persona `agent_inbox_items`, dashboard inbox cards for delivered suggestions and stale accountability checks, accept/reject/done/abandon/open-chat/dismiss/snooze actions, and idempotent opportunity-to-card delivery. The remaining Phase E mobile/auth/service slice now has a detailed design in `Design/core_agent_reliability_redesign.md` section 5.11: keep Uvicorn on loopback, use Tailscale Serve for phone access, add dashboard-local auth and CSRF before any non-local access, enforce tailnet admission controls and anti-impersonation rules, and use Windows Task Scheduler for dashboard plus Jo agent-loop startup. This is awaiting Zach's review before production code. Zach clarified that Purcival should have high autonomy over internal goals, steps, opportunities, dashboard cards, and inferred memory; the architecture should use receipts and correction paths rather than confirmation prompts for those internal writes.
+**Phase:** Phase E - security/access implementation landed; manual mobile verification remains
+**Status:** The Goals dashboard task is closed as the primary development focus. Do not continue dashboard Phase 6 as previously scoped. The new primary focus is the plan in `Design/core_agent_reliability_redesign.md`: migrate the agent loop toward an event log, explicit job types, an opportunity queue, planner/policy/compiler separation, durable execution state, a dashboard delivery inbox, scoped capabilities, and an untrusted-content boundary before adding web/file/computer tools. Phase A safety/instrumentation is complete. Phase B added per-persona `agent_events`, explicit `agent_jobs`, `job_type` metadata on new planning triggers, job leases/retries/completion receipts, and durable tool-observation events before reasoning. Phase C added per-persona `agent_opportunities`, registered `OpportunityTool`, routed planning-cycle step suggestions through `opportunities.propose_goal_step`, created dashboard-visible suggested steps only after recording a delivered opportunity, and suppressed dismissed/rejected/blocked duplicate opportunities. Phase D added shared event-backed accountability receipts for step accept/reject/complete/abandon, scored `accountability_check` opportunities, trusted internal `SuggestionTool` writes, and narrow focused-chat completion/abandonment receipts. Phase E first added the local delivery-inbox slice: per-persona `agent_inbox_items`, dashboard inbox cards for delivered suggestions and stale accountability checks, accept/reject/done/abandon/open-chat/dismiss/snooze actions, and idempotent opportunity-to-card delivery. The Phase E mobile/auth/service slice is now implemented in code from section 5.11: dashboard runtime config guards, PBKDF2 password hashing, signed cookie sessions, CSRF on post-login mutations, private-route auth enforcement, anti-impersonation actor handling, a supported dashboard runner, a non-Telegram Jo agent-loop runner, Windows Task Scheduler wrapper scripts, and updated setup docs all landed with full pytest passing. Remaining work is operational verification on Zach's actual Windows/Tailscale/phone setup: confirm the exact Tailscale Serve commands, verify phone login and inbox/chat flows over the tailnet URL, and verify Task Scheduler startup behavior after reboot/logon. Zach clarified that Purcival should have high autonomy over internal goals, steps, opportunities, dashboard cards, and inferred memory; the architecture should use receipts and correction paths rather than confirmation prompts for those internal writes.
 
 ---
 
@@ -57,11 +57,10 @@ The core thesis:
    receipts in persona events, creates scored accountability opportunities for
    accepted steps, and keeps the chat internal-action path narrow until the
    Phase E delivery inbox/side channel exists.
-6. Review the Phase E implementation notes: the local delivery inbox exists,
-   but mobile access, auth, and Windows service startup are intentionally not
-   implemented yet.
-7. Next approval target: Phase E security/access slice, using section 5.11 of
-   `Design/core_agent_reliability_redesign.md` as the proposed handoff design.
+6. Review the Phase E implementation notes: the dashboard now has auth, CSRF,
+   startup runners, and PowerShell Task Scheduler wrappers in place.
+7. Next execution target: verify Tailscale Serve, phone login/chat/inbox
+   behavior, and Windows Task Scheduler startup on Zach's actual machine.
 
 ### Do:
 
@@ -73,7 +72,8 @@ The core thesis:
 
 - Add web search or local file search before the capability and untrusted
   content model is designed.
-- Add production code before the final design freeze is accepted.
+- Expand beyond section 5.11 into public hosting, web/file tools, or broader
+  capability work before the untrusted-content/capability model is ready.
 
 ---
 
@@ -224,7 +224,10 @@ suggestions and confirms they feel better-tuned.
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-- **Core agent redesign Phase E security/access slice.** The local delivery inbox slice is implemented and the concrete mobile/security design is drafted. Proposed direction: dashboard-local auth with signed sessions and CSRF; Uvicorn remains bound to `127.0.0.1`; Tailscale Serve provides private phone access; tailnet device approval/least-privilege access policy/stale-device removal prevent unwanted network reachability; request data cannot spoof Zach as the actor; LAN binding is fallback-only; Windows Task Scheduler starts the dashboard and a non-Telegram Jo agent-loop runner. Decision target: approve, reject, or modify this design before production code. Design doc: `Design/core_agent_reliability_redesign.md` section 5.11.
+- None currently. Zach's 2026-05-18 request to begin implementing the Phase E
+  mobile/security slice served as the approval to move past the section 5.11
+  design gate. Remaining work is manual operational verification, not a design
+  freeze question.
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -239,6 +242,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-18 - Core agent reliability Phase E secure access implementation - added dashboard runtime config guards, PBKDF2 password hashing, signed session auth, CSRF on post-login mutations, verified actor attribution, dashboard and agent-loop runner scripts, Windows Task Scheduler PowerShell wrappers, README/.env updates, and restored full pytest to passing - committed.
 - 2026-05-18 - Core agent reliability Phase E anti-impersonation design - tightened the mobile access design so Tailscale controls network reachability, Purcival signed sessions control Zach identity, tailnet admission uses device approval and least-privilege policy, and dashboard actor fields cannot be spoofed from requests - awaiting Zach review.
 - 2026-05-18 - Core agent reliability Phase E security/access design - drafted the mobile access/security handoff: Tailscale Serve over loopback, dashboard-local auth and CSRF, safe bind modes, Task Scheduler startup, a non-Telegram agent-loop runner requirement, test plan, acceptance criteria, and rollback path - awaiting Zach review.
 - 2026-05-18 - Core agent reliability Phase E - added per-persona `agent_inbox_items`, delivered opportunity-backed dashboard inbox cards for suggestions and stale accountability checks, wired card actions through existing receipts, added snooze/dismiss/open-chat handling, and kept focused inbox/dashboard tests passing - committed.
@@ -314,6 +318,8 @@ Append entries; never edit prior ones.
 - **2026-05-18 - Phase D step accountability uses shared receipts.** Dashboard step controls, focused-chat internal actions, and `SuggestionTool` status updates now route through one receipt helper that writes `step_*` events with previous status, message/evidence links, and undo-status metadata. Accepted steps create scored `accountability_check` opportunities, and completed/abandoned steps advance linked opportunities.
 - **2026-05-18 - Focused-chat internal actions are a narrow transitional bridge.** The dashboard may suppress and apply `<internal_actions>` only for completing or abandoning the active step, with active-scope validation and visible receipts. This should not be expanded to broad tool use; Phase E should replace it with a proper delivery/action side channel or inbox.
 - **2026-05-18 - Phase E is split into local delivery first, secure access second.** The dashboard inbox can be implemented safely on localhost because it only acts on trusted internal state through existing receipts. Authentication, bind-address changes, Windows service setup, and Tailscale/mobile access remain a separate security slice and should not be slipped in casually.
+- **2026-05-18 - Phase E dashboard auth uses PBKDF2 plus signed sessions.** The secure-access slice uses a standard-library PBKDF2-HMAC-SHA256 password hash, one HMAC-signed cookie session, and CSRF tokens derived from the session nonce. This keeps the one-user local dashboard dependency-light while still enforcing a real auth boundary before any non-local exposure.
+- **2026-05-18 - Phase E Windows startup uses dedicated runners plus PowerShell wrappers.** `scripts/run_dashboard.py` and `scripts/run_agent_loop.py` are the supported Python entrypoints, and `scripts/start_dashboard.ps1` / `scripts/start_agent_loop.ps1` are the Windows Task Scheduler targets so startup behavior stays explicit, repo-local, and easy to audit without introducing a service-wrapper dependency.
 
 ---
 

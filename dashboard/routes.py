@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
@@ -11,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 import brain
@@ -20,6 +19,16 @@ import personas
 from accountability import format_receipt, record_step_status_change
 from agent import _parse_actions_json, strip_schedule_updates
 from context import DEVICE_TERMINAL, assemble_context
+from dashboard.auth import (
+    LOGIN_LIMITER,
+    clear_session_cookie,
+    client_host,
+    create_signed_session,
+    sanitize_next_path,
+    set_session_cookie,
+    verify_dashboard_password,
+)
+from dashboard.config import DashboardConfig
 from dashboard.motivation import title_for_date
 from delivery import decode_inbox_actions, mark_inbox_item, snooze_inbox_item
 from goals import SharedGoalStore
@@ -28,7 +37,6 @@ from summarizer import check_and_summarize
 
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
-DASHBOARD_PERSONA = "jo"
 CHAT_MESSAGE_PAGE_SIZE = 20
 SCHEDULE_UPDATES_START = "<schedule_updates>"
 SCHEDULE_UPDATES_END = "</schedule_updates>"
@@ -46,6 +54,8 @@ templates = Jinja2Templates(directory=TEMPLATE_DIR)
 @dataclass(frozen=True)
 class ChatStreamJob:
     scope: MessageScope
+    actor: str
+    actor_metadata: dict[str, Any]
     user_message_id: int | None = None
 
 
@@ -60,28 +70,57 @@ def category_class(category: str) -> str:
     return f"category-{cleaned.strip('-') or 'general'}"
 
 
-def get_store() -> SharedGoalStore:
-    db_path = os.environ.get("PURCIVAL_GOALS_DB")
-    return SharedGoalStore(Path(db_path)) if db_path else SharedGoalStore()
+def get_dashboard_config(request: Request | None = None) -> DashboardConfig:
+    if request is None:
+        from dashboard.config import load_dashboard_config
+
+        return load_dashboard_config()
+    return request.app.state.dashboard_config
 
 
-def get_dashboard_persona() -> str:
-    return os.environ.get("PURCIVAL_DASHBOARD_PERSONA", DASHBOARD_PERSONA)
+def get_store(request: Request | None = None) -> SharedGoalStore:
+    config = get_dashboard_config(request)
+    return SharedGoalStore(config.goals_db) if config.goals_db else SharedGoalStore()
 
 
-def get_memory() -> PersonaMemory:
-    memory_data_dir = os.environ.get("PURCIVAL_MEMORY_DATA_DIR")
+def get_dashboard_persona(request: Request | None = None) -> str:
+    return get_dashboard_config(request).persona
+
+
+def get_memory(request: Request | None = None) -> PersonaMemory:
+    memory_data_dir = get_dashboard_config(request).memory_data_dir
     if memory_data_dir:
         memory_module.DATA_DIR = Path(memory_data_dir)
-    return PersonaMemory(get_dashboard_persona())
+    return PersonaMemory(get_dashboard_persona(request))
 
 
-def get_provider() -> str | None:
-    return os.environ.get("PURCIVAL_DASHBOARD_PROVIDER")
+def get_provider(request: Request | None = None) -> str | None:
+    return get_dashboard_config(request).provider
 
 
-def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
-    memory = get_memory()
+def get_dashboard_actor(request: Request) -> str:
+    return request.state.dashboard_actor
+
+
+def get_dashboard_actor_metadata(request: Request) -> dict[str, Any]:
+    return {"client_host": client_host(request)}
+
+
+def template_context(request: Request, **model: Any) -> dict[str, Any]:
+    return {
+        "request": request,
+        "csrf_token": getattr(request.state, "dashboard_csrf_token", ""),
+        "dashboard_authenticated": getattr(request.state, "dashboard_authenticated", False),
+        "dashboard_actor": getattr(request.state, "dashboard_actor", None),
+        **model,
+    }
+
+
+def build_dashboard_model(
+    store: SharedGoalStore,
+    request: Request | None = None,
+) -> dict[str, Any]:
+    memory = get_memory(request)
     goals = store.list_goals(status="active")
     steps = store.list_steps()
     goals_by_id = {goal["id"]: goal for goal in goals}
@@ -210,18 +249,18 @@ def build_chat_panel_model(
     store: SharedGoalStore,
     scope: MessageScope,
 ) -> dict[str, Any]:
-    memory = get_memory()
+    memory = get_memory(request)
     chat_messages = memory.get_recent_messages(
         limit=CHAT_MESSAGE_PAGE_SIZE,
         scope=scope,
     )
     total_messages = memory.get_message_count(scope=scope)
-    return {
-        "request": request,
-        "chat_context": chat_context_from_scope(store, scope),
-        "chat_messages": chat_messages,
-        "has_more_messages": total_messages > len(chat_messages),
-    }
+    return template_context(
+        request,
+        chat_context=chat_context_from_scope(store, scope),
+        chat_messages=chat_messages,
+        has_more_messages=total_messages > len(chat_messages),
+    )
 
 
 def parse_chat_scope(
@@ -366,6 +405,8 @@ def apply_chat_internal_actions(
     store: SharedGoalStore,
     memory: PersonaMemory,
     scope: MessageScope,
+    actor: str,
+    actor_metadata: dict[str, Any],
     user_message_id: int | None,
     assistant_message_id: int | None,
 ) -> list[dict[str, Any]]:
@@ -387,6 +428,8 @@ def apply_chat_internal_actions(
                 store,
                 memory,
                 scope,
+                actor,
+                actor_metadata,
                 user_message_id,
                 assistant_message_id,
             )
@@ -404,6 +447,8 @@ def _apply_one_chat_internal_action(
     store: SharedGoalStore,
     memory: PersonaMemory,
     scope: MessageScope,
+    actor: str,
+    actor_metadata: dict[str, Any],
     user_message_id: int | None,
     assistant_message_id: int | None,
 ) -> dict[str, Any]:
@@ -434,7 +479,8 @@ def _apply_one_chat_internal_action(
         step_id=step_id,
         status=status,
         source="dashboard_chat",
-        actor=get_dashboard_persona(),
+        actor=actor,
+        actor_metadata=actor_metadata,
         note=note if isinstance(note, str) else None,
         related_message_ids=[
             message_id
@@ -524,17 +570,17 @@ def iter_user_visible_chunks(chunks: Iterable[str]) -> Iterator[str]:
         yield buffer
 
 
-def stream_chat_response(stream_id: str):
+def stream_chat_response(request: Request, stream_id: str):
     job = _STREAM_JOBS.pop(stream_id, None)
     if job is None:
         yield format_sse("error", {"message": "Chat stream not found"})
         return
 
-    memory = get_memory()
-    store = get_store()
+    memory = get_memory(request)
+    store = get_store(request)
 
     try:
-        persona_prompt = personas.load_persona(get_dashboard_persona())
+        persona_prompt = personas.load_persona(get_dashboard_persona(request))
         entity_context = build_entity_context(store, job.scope)
         system_prompt, messages = assemble_context(
             persona_prompt,
@@ -543,14 +589,14 @@ def stream_chat_response(stream_id: str):
             scope=job.scope,
             entity_context=entity_context,
         )
-        fake_response = os.environ.get("PURCIVAL_DASHBOARD_FAKE_RESPONSE")
+        fake_response = get_dashboard_config(request).fake_response
         response_source = (
             [fake_response]
             if fake_response is not None
             else brain.stream(
                 messages,
                 system=system_prompt,
-                provider=get_provider(),
+                provider=get_provider(request),
                 task="chat",
             )
         )
@@ -578,6 +624,8 @@ def stream_chat_response(stream_id: str):
             store,
             memory,
             job.scope,
+            job.actor,
+            job.actor_metadata,
             job.user_message_id,
             assistant_id,
         )
@@ -609,32 +657,104 @@ def render_suggestion_strip(
     request: Request,
     activity_receipt: str | None = None,
 ):
-    model = build_dashboard_model(get_store())
+    model = build_dashboard_model(get_store(request), request=request)
     model["activity_receipt"] = activity_receipt
     return templates.TemplateResponse(
         request,
         "partials/suggestion_strip.html",
-        model,
+        template_context(request, **model),
     )
+
+
+@router.get("/login")
+def login_page(request: Request, next: str | None = None):
+    if request.state.dashboard_authenticated:
+        return RedirectResponse(url=sanitize_next_path(next), status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        template_context(
+            request,
+            next_path=sanitize_next_path(next),
+            error_message=None,
+        ),
+    )
+
+
+@router.post("/login")
+def login_submit(
+    request: Request,
+    password: str = Form(...),
+    next_path: str = Form("/", alias="next"),
+):
+    config = get_dashboard_config(request)
+    host = client_host(request)
+    if LOGIN_LIMITER.is_locked(
+        host,
+        max_failures=config.login_limit_failures,
+        window_seconds=config.login_limit_window_seconds,
+    ):
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            template_context(
+                request,
+                next_path=sanitize_next_path(next_path),
+                error_message="Login unavailable for a short time. Try again soon.",
+            ),
+            status_code=429,
+        )
+
+    if not verify_dashboard_password(password, config.password_hash):
+        LOGIN_LIMITER.register_failure(
+            host,
+            window_seconds=config.login_limit_window_seconds,
+        )
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            template_context(
+                request,
+                next_path=sanitize_next_path(next_path),
+                error_message="Login failed. Check the password and try again.",
+            ),
+            status_code=401,
+        )
+
+    LOGIN_LIMITER.clear(host)
+    response = RedirectResponse(url=sanitize_next_path(next_path), status_code=303)
+    token = create_signed_session(
+        config.secret_key,
+        session_days=config.session_days,
+    )
+    set_session_cookie(response, config, token)
+    return response
+
+
+@router.post("/logout")
+def logout(request: Request):
+    response = RedirectResponse(url="/login", status_code=303)
+    clear_session_cookie(response, get_dashboard_config(request))
+    return response
 
 
 @router.get("/")
 def index(request: Request):
-    model = build_dashboard_model(get_store())
+    model = build_dashboard_model(get_store(request), request=request)
     return templates.TemplateResponse(
         request,
         "index.html",
-        model,
+        template_context(request, **model),
     )
 
 
 @router.get("/partials/goals")
 def goal_strip(request: Request):
-    model = build_dashboard_model(get_store())
+    model = build_dashboard_model(get_store(request), request=request)
     return templates.TemplateResponse(
         request,
         "partials/goal_strip.html",
-        model,
+        template_context(request, **model),
     )
 
 
@@ -649,12 +769,12 @@ def chat_panel(
     scope_type: str | None = None,
     scope_id: int | None = None,
 ):
-    store = get_store()
+    store = get_store(request)
     if scope_type is not None and scope_id is not None:
         scope = parse_chat_scope(store, scope_type, scope_id)
         model = build_chat_panel_model(request, store, scope)
     else:
-        model = build_dashboard_model(store)
+        model = template_context(request, **build_dashboard_model(store, request=request))
     return templates.TemplateResponse(
         request,
         "partials/chat_panel.html",
@@ -663,16 +783,16 @@ def chat_panel(
 
 
 @router.get("/chat/streams/{stream_id}")
-def chat_stream(stream_id: str):
+def chat_stream(request: Request, stream_id: str):
     return StreamingResponse(
-        stream_chat_response(stream_id),
+        stream_chat_response(request, stream_id),
         media_type="text/event-stream",
     )
 
 
 @router.get("/chat/{scope_type}/{scope_id}")
 def scoped_chat_panel(scope_type: str, scope_id: int, request: Request):
-    store = get_store()
+    store = get_store(request)
     scope = parse_chat_scope(store, scope_type, scope_id)
     model = build_chat_panel_model(request, store, scope)
     return templates.TemplateResponse(
@@ -684,15 +804,16 @@ def scoped_chat_panel(scope_type: str, scope_id: int, request: Request):
 
 @router.get("/chat/{scope_type}/{scope_id}/messages")
 def scoped_chat_messages(
+    request: Request,
     scope_type: str,
     scope_id: int,
     before_id: int | None = None,
     limit: int = CHAT_MESSAGE_PAGE_SIZE,
 ):
-    store = get_store()
+    store = get_store(request)
     scope = parse_chat_scope(store, scope_type, scope_id)
     page_size = min(max(limit, 1), 50)
-    memory = get_memory()
+    memory = get_memory(request)
     if before_id is None:
         messages = memory.get_recent_messages(limit=page_size, scope=scope)
         return {
@@ -713,6 +834,7 @@ def scoped_chat_messages(
 
 @router.post("/chat/{scope_type}/{scope_id}/messages")
 def create_chat_message(
+    request: Request,
     scope_type: str,
     scope_id: int,
     message: str = Form(...),
@@ -721,13 +843,15 @@ def create_chat_message(
     if not cleaned:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-    store = get_store()
+    store = get_store(request)
     scope = parse_chat_scope(store, scope_type, scope_id)
-    user_message_id = get_memory().add_message("user", cleaned, scope=scope)
+    user_message_id = get_memory(request).add_message("user", cleaned, scope=scope)
 
     stream_id = uuid.uuid4().hex
     _STREAM_JOBS[stream_id] = ChatStreamJob(
         scope=scope,
+        actor=get_dashboard_actor(request),
+        actor_metadata=get_dashboard_actor_metadata(request),
         user_message_id=user_message_id,
     )
     return {"stream_id": stream_id, "message_id": user_message_id}
@@ -762,8 +886,8 @@ def _render_inbox_step_update(
     action_type: str,
     status: str,
 ) -> Any:
-    store = get_store()
-    memory = get_memory()
+    store = get_store(request)
+    memory = get_memory(request)
     item = _require_inbox_item(memory, item_id)
     step_id = _require_inbox_step_action(item, action_type)
     try:
@@ -773,7 +897,8 @@ def _render_inbox_step_update(
             step_id=step_id,
             status=status,
             source="dashboard_inbox",
-            actor=get_dashboard_persona(),
+            actor=get_dashboard_actor(request),
+            actor_metadata=get_dashboard_actor_metadata(request),
         )
         mark_inbox_item(memory, item_id, "acted", reason=action_type)
     except ValueError as exc:
@@ -803,7 +928,7 @@ def abandon_inbox_item(item_id: int, request: Request):
 
 @router.post("/inbox/{item_id}/dismiss")
 def dismiss_inbox_item(item_id: int, request: Request):
-    memory = get_memory()
+    memory = get_memory(request)
     _require_inbox_item(memory, item_id)
     mark_inbox_item(memory, item_id, "dismissed", reason="dashboard_dismiss")
     return render_suggestion_strip(request, "Inbox item dismissed.")
@@ -811,7 +936,7 @@ def dismiss_inbox_item(item_id: int, request: Request):
 
 @router.post("/inbox/{item_id}/snooze")
 def snooze_dashboard_inbox_item(item_id: int, request: Request):
-    memory = get_memory()
+    memory = get_memory(request)
     _require_inbox_item(memory, item_id)
     snooze_inbox_item(memory, item_id, hours=24)
     return render_suggestion_strip(request, "Inbox item snoozed until tomorrow.")
@@ -821,12 +946,13 @@ def snooze_dashboard_inbox_item(item_id: int, request: Request):
 def accept_step(step_id: int, request: Request):
     try:
         receipt = record_step_status_change(
-            store=get_store(),
-            memory=get_memory(),
+            store=get_store(request),
+            memory=get_memory(request),
             step_id=step_id,
             status="accepted",
             source="dashboard_ui",
-            actor=get_dashboard_persona(),
+            actor=get_dashboard_actor(request),
+            actor_metadata=get_dashboard_actor_metadata(request),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -840,12 +966,13 @@ def reject_step(
 ):
     try:
         receipt = record_step_status_change(
-            store=get_store(),
-            memory=get_memory(),
+            store=get_store(request),
+            memory=get_memory(request),
             step_id=step_id,
             status="rejected",
             source="dashboard_ui",
-            actor=get_dashboard_persona(),
+            actor=get_dashboard_actor(request),
+            actor_metadata=get_dashboard_actor_metadata(request),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -856,12 +983,13 @@ def reject_step(
 def complete_step(step_id: int, request: Request):
     try:
         receipt = record_step_status_change(
-            store=get_store(),
-            memory=get_memory(),
+            store=get_store(request),
+            memory=get_memory(request),
             step_id=step_id,
             status="completed",
             source="dashboard_ui",
-            actor=get_dashboard_persona(),
+            actor=get_dashboard_actor(request),
+            actor_metadata=get_dashboard_actor_metadata(request),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -872,12 +1000,13 @@ def complete_step(step_id: int, request: Request):
 def abandon_step(step_id: int, request: Request):
     try:
         receipt = record_step_status_change(
-            store=get_store(),
-            memory=get_memory(),
+            store=get_store(request),
+            memory=get_memory(request),
             step_id=step_id,
             status="abandoned",
             source="dashboard_ui",
-            actor=get_dashboard_persona(),
+            actor=get_dashboard_actor(request),
+            actor_metadata=get_dashboard_actor_metadata(request),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
