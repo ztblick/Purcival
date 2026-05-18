@@ -1,6 +1,6 @@
 # Core Agent Reliability Redesign
 
-**Status:** Phase E delivery inbox slice implemented; security/access design drafted
+**Status:** Phase E code landed; mobile/Tailscale/Task Scheduler verification remains
 **Date:** 2026-05-18
 **Scope:** reasoning, scheduling, action selection, learning, security, and proactive delivery
 
@@ -1082,6 +1082,34 @@ The old loop can be migrated incrementally. Do not rewrite everything at once.
 
 ---
 
+## 6.5 Architecture Feature Audit
+
+This audit was added after Phase E because the first implementation phases were
+named around delivery milestones, not around every feature in section 5. The
+result is mixed: Phases A-E successfully built the early substrate, but they did
+not complete the full proposed architecture.
+
+| Feature | Status after Phase E | Notes |
+| --- | --- | --- |
+| 5.1 Event Log | Partial, usable substrate | `agent_events` exists in each persona DB and now records tool observations, job outcomes, opportunities, inbox events, and step receipts. It is not yet the canonical event stream for every conversation, memory update, security event, or external observation. |
+| 5.2 Structured Working Memory | Not implemented | Purcival still relies on narrative state, summaries, scoped messages, goals, and steps. There is no `memory_items` table, typed belief model, provenance validator, confidence lifecycle, or reflection processor. |
+| 5.3 Opportunity Queue | Partial, useful for dashboard goals | `agent_opportunities` exists and supports goal-step suggestions plus accountability checks, duplicate suppression, and dashboard delivery. It does not yet cover calendar/email/research/file/reminder opportunities or a general policy lifecycle. |
+| 5.4 Explicit Job Types | Partial, useful migration layer | `agent_jobs` and trigger `job_type` metadata exist with leasing, retries, and completion receipts. The scheduler still uses triggers as the low-level clock and only a small subset of job types is actively exercised. |
+| 5.5 Planner, Critic, Compiler | Mostly not implemented | The loop still makes one reasoning call that can emit direct tool actions. There is compatibility routing and validation, but no durable plan object, separate policy gate, or compiler that turns approved plans into tool calls. |
+| 5.6 Execution Engine | Partial at job level, weak at action level | Jobs have leases/retries/completion receipts. Individual tool actions are still mostly `agent_actions` log rows with immediate execution; they lack idempotency keys, per-action leases, retry scheduling, durable approval records, and receipt schemas. |
+| 5.7 Communication and Delivery Layer | Partial, dashboard-first | `agent_inbox_items` and dashboard cards exist for suggestions and accountability. Mobile auth/startup code is in place, but real phone/Tailscale/Task Scheduler verification is still required. Delivery policy, attention windows, and non-dashboard surfaces are not complete. |
+| 5.8 Tool Capability Model | Not implemented beyond tier naming | `internal_write` is used, but tools still declare only broad tiers plus parameter descriptions. There is no capability metadata for side effects, data sensitivity, untrusted output, rate limits, allowed roots, deny rules, or approval policy. |
+| 5.9 Untrusted Content Boundary | Not implemented | Web/file tools remain deferred, which is good. Before adding them, tool outputs need explicit untrusted-content wrapping and the compiler/policy layer must reject actions justified only by untrusted instructions. |
+| 5.10 Learning Loop | Not implemented | Step outcomes and inbox outcomes now create the inputs, but there is no recurring reflection job that turns events into structured memory, preference updates, suppression rules, or goal/step framing improvements. |
+
+The important conclusion: Phase E succeeded at mobile-ready dashboard delivery
+and the first event/job/opportunity/inbox substrate. It did not complete the
+architecture. The remaining phases must implement structured memory, reflection,
+planner/policy/compiler separation, action execution state, capability metadata,
+and untrusted-content handling before web/file/computer tools are added.
+
+---
+
 ## 7. Phase Plan
 
 ### Phase A - Design freeze and instrumentation
@@ -1269,34 +1297,177 @@ Implementation notes:
   bound to loopback, Tailscale Serve for phone access, and Windows Task
   Scheduler for dashboard/agent startup. Zach review is required before
   production code.
+- The security/access implementation has now landed in code: dashboard runtime
+  config guards, PBKDF2 password hashing, signed cookie sessions, CSRF on
+  post-login mutations, private-route auth enforcement, anti-impersonation
+  actor handling, dedicated dashboard and agent-loop runners, Windows Task
+  Scheduler wrapper scripts, and setup docs.
+- Phase E is not fully accepted until Zach's actual Windows/Tailscale/phone
+  setup is manually verified.
 
-### Phase F - Secure web and file tools
+### Phase E.5 - Operational verification gate
+
+Finish Phase E before any architecture expansion.
+
+- Verify the exact Tailscale Serve command on Zach's Windows desktop.
+- Verify phone login over the tailnet HTTPS URL.
+- Verify dashboard inbox actions from the phone: accept, reject, done, abandon,
+  open chat, dismiss, and snooze.
+- Verify focused chat from the phone, including SSE streaming and receipt
+  events.
+- Verify Task Scheduler starts both the dashboard and Jo agent loop after
+  reboot or logon.
+- Update `README.md`, `PROGRESS.md`, and this design doc with the verified
+  commands and any deviations from section 5.11.
+
+Acceptance:
+
+- Zach can open and use the dashboard from his phone through Tailscale.
+- Dashboard remains local-only behind Tailscale Serve, with Purcival auth and
+  CSRF enabled.
+- Scheduled startup behavior is proven on Zach's machine.
+
+### Phase F - Structured working memory and reflection
+
+Implements sections 5.2 and 5.10 before expanding external tool access.
+
+- Add a typed `memory_items` store with kind, subject, content, confidence,
+  evidence event ids, status, timestamps, and optional expiry.
+- Add validators for memory writes: required evidence, confidence bounds,
+  status transitions, and sensitive-inference handling.
+- Add an explicit `reflection` job type that processes recent `agent_events`.
+- Convert accepted/rejected/completed/abandoned steps, dismissed inbox items,
+  repeated ignored suggestions, and Zach corrections into low- or
+  medium-confidence memory/preference items.
+- Add opportunity suppression or preference records when feedback patterns are
+  clear.
+- Surface recent memory changes in an activity/correction path so Zach can
+  correct bad inferences without routine confirmation prompts.
+- Keep summaries and narrative state, but stop treating them as the only memory
+  substrate.
+
+Acceptance:
+
+- A reflection job can process recent events into durable memory items with
+  evidence.
+- Memory items are available to future planning/chat context.
+- Bad memory writes can be corrected or superseded without deleting history.
+- Tests cover schema validation, confidence/status transitions, reflection
+  idempotency, and context assembly.
+
+### Phase G - Planner, policy gate, and compiler
+
+Implements section 5.5 and strengthens sections 5.3, 5.4, and 5.7.
+
+- Add a durable plan/proposal representation for model-generated candidate
+  plans before tool execution.
+- Split the current one-shot action path into named stages:
+  planner, deterministic policy gate, and compiler.
+- Keep one model call acceptable at first, but require typed planner output
+  before any tool action is compiled.
+- Move duplicate/stale/evidence/attention/capability checks into a reusable
+  policy gate instead of scattering them across prompts and individual tools.
+- Make the compiler the only code path that turns approved plans into concrete
+  tool calls for non-trivial actions.
+- Preserve the current compatibility path only for simple internal writes while
+  the new path is being proven.
+
+Acceptance:
+
+- A planning cycle can create opportunities and candidate plans without
+  executing them directly from freeform LLM output.
+- Rejected policy decisions are recorded with reasons.
+- Compiled actions are schema-validated before execution.
+- Tests cover duplicate rejection, weak-evidence rejection, attention-budget
+  rejection, and successful compilation of a low-risk internal write.
+
+### Phase H - Durable action execution and capability registry
+
+Implements sections 5.6 and 5.8 before web/file tools.
+
+- Add durable per-action execution state with pending, leased, completed,
+  failed_retryable, failed_terminal, waiting_for_approval, and cancelled states.
+- Add idempotency keys, lease owners, lease expiry, attempt counts,
+  `next_retry_at`, approval ids, and structured receipt JSON.
+- Expand tool declarations from tier-only methods to tier plus scoped
+  capability metadata: side effects, data sensitivity, untrusted output flag,
+  parameter schema, output schema, rate limits, and approval policy.
+- Migrate existing tools into the capability registry without adding new
+  third-party dependencies.
+- Represent internal goal/step/memory/dashboard writes as low-friction
+  `internal_write` capabilities that require events and receipts, not routine
+  approval.
+
+Acceptance:
+
+- Tool actions can be retried safely or proven completed from durable state.
+- Execute-tier and external-action capabilities wait for approval unless a
+  narrow capability grant allows them.
+- Existing dashboard/accountability behavior still works through the new
+  action execution path.
+- Tests cover lease recovery, idempotency, retry/terminal failure, approval
+  waits, and capability-policy enforcement.
+
+### Phase I - Delivery policy and correction UX
+
+Completes the practical parts of section 5.7 for internal autonomy.
+
+- Add a delivery policy that chooses silent, dashboard inbox, chat, mobile
+  push placeholder, or approval request based on urgency, impact, confidence,
+  attention cost, risk, time of day, and user-interrupt windows.
+- Separate background work hours from user-interrupt hours.
+- Add an activity feed or equivalent dashboard view for recent autonomous
+  internal writes: goals, steps, memories, opportunities, and inbox outcomes.
+- Add correction affordances for autonomous internal writes: open chat, undo
+  where practical, dismiss, and mark wrong/superseded.
+- Keep native mobile push out of scope unless Zach explicitly reopens it.
+
+Acceptance:
+
+- Overnight work can stay silent or create morning-facing cards according to
+  policy.
+- Autonomous internal writes are visible and correctable.
+- Tests cover delivery level selection and correction/undo receipts.
+
+### Phase J - Untrusted-content boundary and read-only web/file tools
+
+Implements section 5.9 and only then adds the first deferred external
+observation tools.
 
 - Design and implement a read-only web search/fetch tool with caching, rate
-  limits, and untrusted-content boundaries.
+  limits, source capture, and explicit untrusted-content wrapping.
 - Design and implement a read-only local file search tool with explicit roots
   and deny rules.
-- Add prompt-injection tests using malicious page/file/email content.
+- Ensure external web/email/document/file content is always labeled as
+  untrusted evidence, never instructions.
+- Teach the policy gate/compiler to reject tool calls justified only by
+  instructions inside untrusted content.
+- Add prompt-injection tests using malicious page, file, email, and document
+  content.
 
 Acceptance:
 
 - Purcival can gather web/file evidence into events.
 - No untrusted content can directly trigger actions.
 - Zach can inspect sources behind proactive suggestions.
+- Prompt-injection regression tests fail against the old path and pass against
+  the new boundary.
 
-### Phase G - Higher-autonomy execution
+### Phase K - Higher-autonomy external execution
 
-Only after Phases B-F are stable.
+Only after Phases E.5-J are stable.
 
 - Draft emails/calendar changes from opportunities.
-- Approval inbox for external actions.
-- Optional execute-tier actions after repeated trust calibration.
+- Add approval inbox items for external actions.
+- Add optional execute-tier actions only after repeated trust calibration and
+  narrow, revocable capability grants.
 
 Acceptance:
 
 - External actions require explicit approval unless Zach grants a narrow,
-  revocable capability. Internal goal, step, memory, opportunity, and dashboard
-  card writes do not require approval by default.
+  revocable capability.
+- Internal goal, step, memory, opportunity, and dashboard card writes do not
+  require approval by default, but they remain event-backed and correctable.
 
 ---
 
