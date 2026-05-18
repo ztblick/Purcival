@@ -1,6 +1,6 @@
 # Core Agent Reliability Redesign
 
-**Status:** Phase E delivery inbox slice implemented
+**Status:** Phase E delivery inbox slice implemented; security/access design drafted
 **Date:** 2026-05-18
 **Scope:** reasoning, scheduling, action selection, learning, security, and proactive delivery
 
@@ -463,20 +463,15 @@ interacts with Purcival, so inbox cards should be easy to open into a focused
 conversation. The card is the visible artifact; the chat is where meaning gets
 worked out.
 
-For mobile, the dashboard should eventually be served from the Windows PC
-through a private access layer. Zach has no strong preference on the mechanism
-as long as it is secure.
+For mobile, the dashboard should be served from the Windows PC through a
+private access layer. Zach has no strong preference on the mechanism as long as
+it is secure. The detailed Phase E security/access design in section 5.11 is
+now the handoff target for the next implementation slice.
 
-Recommendation for early mobile access:
-
-1. Run Purcival as a Windows service or scheduled startup process.
-2. Bind the dashboard to LAN initially.
-3. Use Tailscale for private phone access before exposing anything publicly.
-4. Add HTTPS and authentication before any public tunnel.
-
-Cloudflare Tunnel is a later option, but it raises the security bar. Tailscale
-is the safer first move for a self-hosted personal assistant unless another
-equally private path is chosen during implementation.
+Short version: keep Uvicorn bound to loopback, put Tailscale Serve in front of
+it for phone access, require Purcival's own dashboard authentication anyway,
+and use Windows Task Scheduler for startup before introducing a service-wrapper
+dependency.
 
 ### 5.8 Tool Capability Model
 
@@ -572,6 +567,407 @@ This is how Purcival becomes less generic over time. Zach explicitly wants
 Purcival to infer what is important from conversations without requiring every
 long-term memory or preference to be confirmed. Low-confidence memories can stay
 low-confidence, but they should still be usable as soft context.
+
+### 5.11 Phase E Secure Mobile Access Design
+
+This section is the concrete design gate for the remaining Phase E
+security/access slice. It covers mobile exposure, dashboard authentication,
+binding rules, Windows startup, and Tailscale. It intentionally does not add
+web search, file search, public tunnels, Telegram reactivation, or native mobile
+push.
+
+#### 5.11.1 Security posture
+
+Purcival's dashboard is not a harmless status page. It can read private goals,
+conversation history, and inbox cards, and it can mutate trusted internal state
+such as steps and accountability receipts. Future phases will add broader local
+file and web capabilities. Treat dashboard access as access to a personal
+assistant control plane.
+
+Threats to design against in Phase E:
+
+- Another device on the same LAN reaches the dashboard.
+- A malicious website causes Zach's browser to POST to the dashboard.
+- A tailnet device Zach no longer trusts can still reach the dashboard.
+- A guessed or leaked dashboard URL exposes private memory and goal state.
+- A process restarts with unsafe bind/auth settings after Windows reboot.
+- Future external-content features make the dashboard more valuable to attack.
+
+Non-goals for this slice:
+
+- Public internet hosting.
+- Multi-user accounts or role-based access control.
+- Native iOS/Android push notifications.
+- Running Purcival as `SYSTEM` before the app has a tighter filesystem
+  capability model.
+
+#### 5.11.2 Recommended access topology
+
+Use this as the default implementation path:
+
+```text
+Zach's phone browser
+  |
+  | HTTPS inside Zach's Tailscale tailnet
+  v
+Tailscale Serve on Windows desktop
+  |
+  | reverse proxy to localhost only
+  v
+127.0.0.1:8000 Uvicorn
+  |
+  v
+FastAPI dashboard with Purcival auth + CSRF
+```
+
+Important choices:
+
+- Uvicorn should stay bound to `127.0.0.1` for Tailscale mode.
+- Tailscale Serve should expose the local service to the tailnet, not the
+  public internet.
+- Tailscale Funnel, Cloudflare Tunnel, router port forwarding, and public DNS
+  exposure are explicitly out of scope for Phase E.
+- LAN binding is allowed only as a fallback mode for a trusted home network,
+  never as the recommended mobile path.
+
+This is stricter than "bind to LAN and rely on the Wi-Fi password." That weaker
+path is not good enough for a control plane that will eventually sit near email,
+calendar, local files, and autonomous actions.
+
+#### 5.11.3 Exposure modes
+
+Add a small dashboard runtime configuration layer. Do not read environment
+variables directly from route handlers.
+
+```text
+PURCIVAL_DASHBOARD_EXPOSURE=local | tailscale | lan
+PURCIVAL_DASHBOARD_HOST=127.0.0.1
+PURCIVAL_DASHBOARD_PORT=8000
+PURCIVAL_DASHBOARD_PUBLIC_BASE_URL=
+PURCIVAL_DASHBOARD_AUTH_ENABLED=true | false
+PURCIVAL_DASHBOARD_PASSWORD_HASH=
+PURCIVAL_DASHBOARD_SECRET_KEY=
+PURCIVAL_DASHBOARD_SESSION_DAYS=30
+PURCIVAL_DASHBOARD_COOKIE_SECURE=true | false
+PURCIVAL_DASHBOARD_TRUSTED_ORIGINS=
+```
+
+Mode semantics:
+
+```text
+local:
+  Host defaults to 127.0.0.1.
+  Auth may be disabled for pure local development.
+  No Windows firewall rule.
+
+tailscale:
+  Host remains 127.0.0.1.
+  Auth is required.
+  Cookie Secure is required because the browser-facing URL should be HTTPS.
+  Tailscale Serve handles private tailnet exposure.
+
+lan:
+  Host may be 0.0.0.0 or a specific LAN IP.
+  Auth is required.
+  Cookie Secure should be false unless HTTPS is separately configured.
+  Windows firewall rule must be Private-profile only and limited to the port.
+```
+
+Startup guardrails:
+
+- If host is not loopback, refuse to start unless auth is enabled and configured.
+- If exposure is `tailscale`, refuse to start unless auth is enabled and
+  `PURCIVAL_DASHBOARD_SECRET_KEY` plus `PURCIVAL_DASHBOARD_PASSWORD_HASH` are
+  present.
+- If exposure is `lan`, refuse to start unless auth is enabled and the log
+  includes a conspicuous warning that LAN mode is not the preferred mobile path.
+- Do not provide an "unsafe allow all" override in the first implementation.
+
+#### 5.11.4 Dashboard authentication
+
+Implement dashboard-local authentication with the standard library. Do not add
+a new auth framework or database dependency for a one-user local app.
+
+Password storage:
+
+- Add a helper script that prompts for a password and prints a hash for `.env`.
+- Store only a PBKDF2-HMAC-SHA256 hash:
+
+```text
+pbkdf2_sha256$<iterations>$<salt_b64>$<hash_b64>
+```
+
+- Use `secrets.compare_digest()` for verification.
+- Use a high iteration count appropriate for an interactive login.
+
+Sessions:
+
+- Use one signed cookie, for example `purcival_dashboard_session`.
+- Sign with HMAC-SHA256 using `PURCIVAL_DASHBOARD_SECRET_KEY`.
+- Include issued-at, expiry, and a random nonce in the signed payload.
+- Set `HttpOnly`.
+- Set `SameSite=Lax` at minimum; `Strict` is acceptable if it does not break
+  the Tailscale mobile flow.
+- Set `Secure` when the browser-facing URL is HTTPS, including Tailscale Serve.
+- Session duration defaults to 30 days so the phone is usable, but logging out
+  clears the cookie.
+
+Routes:
+
+```text
+GET  /login
+POST /login
+POST /logout
+```
+
+Every existing dashboard route, SSE stream, HTMX partial, inbox action, step
+action, and chat endpoint should require an authenticated session. Static
+assets may remain public because they carry no private state. Any health route
+must either require auth or return only a constant value with no database or
+configuration detail.
+
+Rate limiting:
+
+- Add a small in-memory login failure limiter keyed by client host.
+- This is not a perfect distributed defense, but it is enough behind Tailscale
+  and avoids a new dependency.
+- Failed login responses must not reveal whether the password hash is missing,
+  malformed, or wrong.
+
+#### 5.11.5 CSRF protection
+
+Authentication alone is not enough. A random website can try to submit forms to
+a private dashboard if Zach's browser has a valid session.
+
+Add CSRF protection for every mutating dashboard request:
+
+- Generate a CSRF token tied to the signed session nonce.
+- Render it into forms as a hidden field.
+- Configure HTMX to send it as `X-CSRF-Token`.
+- Reject missing or invalid tokens with `403`.
+- Apply this to login only if it does not complicate first-run setup; apply it
+  to every post-login mutation in the first implementation.
+
+This must cover:
+
+- Step accept/reject/done/abandon.
+- Inbox accept/reject/dismiss/snooze/open-chat if implemented as POST.
+- Chat message POST.
+- Logout.
+- Any future goal or memory correction endpoint.
+
+#### 5.11.6 Tailscale configuration
+
+Tailscale should be treated as the private network layer, not the only security
+layer.
+
+Implementation handoff:
+
+1. Install/sign in to Tailscale on the Windows desktop and Zach's phone.
+2. Keep Uvicorn on `127.0.0.1:8000`.
+3. Configure Tailscale Serve to forward the desktop's tailnet HTTPS URL to
+   `http://127.0.0.1:8000`.
+4. Use MagicDNS or the generated Tailscale HTTPS name as
+   `PURCIVAL_DASHBOARD_PUBLIC_BASE_URL`.
+5. Restrict tailnet policy so only Zach's account/devices can reach the
+   dashboard service where practical.
+6. Disable or avoid Tailscale Funnel for this service.
+
+The implementation should document the exact local commands after they are
+verified on Zach's Windows machine. Do not guess them in production docs before
+running them; Tailscale CLI details have changed before.
+
+#### 5.11.7 LAN fallback
+
+LAN mode exists for debugging or for a temporary no-Tailscale fallback, but it
+should not be the recommended mobile design.
+
+Required LAN controls:
+
+- Auth enabled.
+- CSRF enabled.
+- Bind to a specific LAN IP if practical; otherwise `0.0.0.0`.
+- Windows firewall rule limited to the dashboard port and Private profile.
+- No router port forwarding.
+- No UPnP.
+- No public DNS.
+
+LAN mode should log the active URL and a warning at startup. It should also be
+clearly reversible: stop the scheduled task and remove the firewall rule.
+
+#### 5.11.8 Windows startup and background work
+
+Use Windows Task Scheduler for Phase E startup. Do not introduce NSSM, WinSW,
+pywin32, or a custom Windows service dependency yet.
+
+Rationale:
+
+- Task Scheduler is built into Windows.
+- Running as Zach's normal user preserves access to the repo, `.env`, user
+  profile, Google OAuth files, Ollama, and local paths.
+- It avoids running the assistant as `SYSTEM` before file capabilities and deny
+  rules are mature.
+- It is easier to inspect, disable, and debug than a service wrapper.
+
+Planned startup units:
+
+```text
+PurcivalDashboard
+  Trigger: at Zach logon
+  Action: run a PowerShell wrapper that starts Uvicorn
+  Working directory: C:\Users\ztbli\Desktop\Purcival
+  User: Zach's normal Windows user
+  Restart: Task Scheduler retry settings
+  Logs: logs/dashboard.log and logs/dashboard.err.log
+
+PurcivalAgentLoop
+  Trigger: at Zach logon
+  Action: run a Python/PowerShell wrapper for Jo's scheduler loop
+  Working directory: C:\Users\ztbli\Desktop\Purcival
+  User: Zach's normal Windows user
+  Restart: Task Scheduler retry settings
+  Logs: logs/agent_loop.log and logs/agent_loop.err.log
+```
+
+The implementation needs a dedicated non-Telegram agent-loop runner before
+overnight work can be considered complete. It should:
+
+- Load Jo's persona prompt.
+- Open `PersonaMemory("jo")`.
+- Call `ensure_agent_has_plan(memory)`.
+- Start `start_scheduler(...)` with a no-op or inbox-backed `send_fn`.
+- Keep the asyncio loop alive until interrupted.
+- Log startup, shutdown, trigger failures, and uncaught exceptions.
+
+Do not reuse `run_telegram.py` for this. Telegram is inactive and should not be
+the background-service anchor.
+
+#### 5.11.9 Mobile UX scope
+
+Phase E mobile means "Zach can securely open the dashboard from his phone and
+act on cards." It does not mean native push notifications.
+
+Required mobile behavior:
+
+- Login page is usable on phone width.
+- Inbox cards, step cards, and focused chat remain reachable on mobile.
+- Chat streaming works over the Tailscale URL.
+- Snooze/dismiss/done/abandon actions work from the phone.
+- Session expiry sends Zach back to login without losing a typed message if
+  practical.
+
+Deferred:
+
+- Web Push.
+- App badges.
+- Push notification routing.
+- Homescreen/PWA packaging.
+- Telegram replacement.
+
+#### 5.11.10 Audit and observability
+
+Access events should be visible enough to debug without logging secrets.
+
+Log:
+
+- Dashboard startup mode, host, port, and exposure mode.
+- Whether auth is enabled.
+- Successful login timestamp and client host.
+- Failed login count and lockout events.
+- Logout events.
+- Auth-required redirects, without noisy per-asset logging.
+- CSRF failures.
+- Service/task startup and shutdown.
+
+Do not log:
+
+- Passwords.
+- Password hashes.
+- Session cookies.
+- CSRF tokens.
+- Full chat messages in access logs.
+- API keys or OAuth tokens.
+
+Consider adding `dashboard_login`, `dashboard_logout`, and
+`dashboard_auth_failed` events to `agent_events` only after deciding whether
+security events belong in persona memory. Plain application logs are enough for
+the first implementation.
+
+#### 5.11.11 Implementation sequence
+
+Implement in this order:
+
+1. Add dashboard config parsing and startup guard tests.
+2. Add password-hash helper script.
+3. Add auth/session module and FastAPI middleware.
+4. Add login/logout templates and mobile styling.
+5. Add CSRF helpers and wire every mutating dashboard route.
+6. Add route tests for unauthenticated access, login, logout, CSRF rejection,
+   and authenticated HTMX/SSE behavior.
+7. Add a `run_dashboard` script or documented Uvicorn entrypoint that uses the
+   config layer.
+8. Add the non-Telegram Jo agent-loop runner.
+9. Add Windows Task Scheduler setup notes or scripts.
+10. Configure and manually verify Tailscale Serve from Zach's phone.
+11. Update `README.md`, `PROGRESS.md`, and this design doc with verified
+    commands and acceptance results.
+
+Keep commits split if implementation gets large: auth/config first, startup
+runner second, Tailscale/ops docs third.
+
+#### 5.11.12 Test plan
+
+Automated tests:
+
+- Password hash generation and verification.
+- Malformed password hashes fail closed.
+- Signed sessions reject tampering and expiry.
+- Non-loopback bind refuses startup when auth is missing.
+- Tailscale exposure refuses startup when auth secrets are missing.
+- Unauthenticated dashboard page redirects to login.
+- Unauthenticated partial/action/chat routes are blocked.
+- Login sets the expected cookie flags.
+- Logout clears the session.
+- Mutating POST without CSRF returns `403`.
+- Mutating POST with CSRF preserves current behavior.
+- SSE chat stream requires auth and still filters hidden control tags.
+
+Manual acceptance:
+
+- Dashboard starts locally at `http://127.0.0.1:8000`.
+- Dashboard is unreachable from another LAN device in local/tailscale mode.
+- Phone reaches the dashboard over the Tailscale HTTPS URL.
+- Login succeeds on the phone.
+- Inbox actions work on the phone and write the existing receipts.
+- Focused chat works on the phone.
+- Reboot or logout/login restarts the dashboard and agent loop.
+- Disabling the scheduled tasks stops background access cleanly.
+
+#### 5.11.13 Acceptance criteria
+
+The Phase E security/access slice is complete when:
+
+- Dashboard exposure defaults to local-only.
+- The app refuses unsafe non-loopback startup without auth.
+- Dashboard auth and CSRF protect all private routes and mutations.
+- Zach can open the dashboard from his phone over Tailscale.
+- No public internet tunnel or router port forwarding is required.
+- Windows startup runs the dashboard and Jo's scheduler loop without Telegram.
+- Overnight jobs can produce auditable events, opportunities, and inbox cards.
+- The setup is documented with commands verified on Zach's Windows machine.
+
+#### 5.11.14 Rollback
+
+Rollback must be simple:
+
+- Stop or disable `PurcivalDashboard` and `PurcivalAgentLoop` scheduled tasks.
+- Remove or reset the Tailscale Serve mapping.
+- Set `PURCIVAL_DASHBOARD_EXPOSURE=local`.
+- Start the dashboard manually on `127.0.0.1`.
+- Remove any LAN firewall rule if LAN mode was tested.
+
+No database migration should be required for rollback unless auth events are
+later written to `agent_events`; the first implementation should avoid that.
 
 ---
 
@@ -793,6 +1189,11 @@ Implementation notes:
   add authentication, configure Windows service startup, or set up Tailscale.
   Those are the next Phase E security slice and need a concrete access/auth
   design before implementation.
+- The concrete security/access design is now drafted in section 5.11. The
+  recommended implementation path is dashboard-local auth plus CSRF, Uvicorn
+  bound to loopback, Tailscale Serve for phone access, and Windows Task
+  Scheduler for dashboard/agent startup. Zach review is required before
+  production code.
 
 ### Phase F - Secure web and file tools
 
@@ -873,11 +1274,14 @@ actually trying to build.
    and infer what is important without requiring explicit confirmation for
    every long-term preference or memory.
 
-Remaining design question:
+Remaining design questions:
 
 - What precise receipt/undo UX should the dashboard provide for autonomous
   internal writes? My recommendation: every autonomous goal/step/memory change
   appears in an activity feed with "open chat", "undo", and "correct" affordances.
+- Should Phase E adopt the section 5.11 recommendation as written: Tailscale
+  Serve over loopback as the default mobile path, Task Scheduler instead of a
+  service wrapper, and dashboard-local auth/CSRF before any non-local access?
 
 ---
 
@@ -893,7 +1297,12 @@ Approve, reject, or modify these directions:
 - Split action selection into planner, policy gate, and compiler.
 - Treat dashboard cards as the primary proactive delivery surface.
 - Use a secure private mobile access path, with Tailscale as the current
-  default recommendation unless implementation discovers a better option.
+  default recommendation, specifically Tailscale Serve over loopback for Phase E
+  unless implementation discovers a better private option.
+- Add dashboard-local authentication, signed sessions, and CSRF before any
+  phone or LAN access.
+- Use Windows Task Scheduler for Phase E dashboard and agent-loop startup
+  rather than adding a Windows service-wrapper dependency.
 - Permit autonomous internal writes for opportunities, dashboard cards, goals,
   steps, and learned memories, backed by events, receipts, and undo/correction.
 - Defer web/file tools until the untrusted-content and capability model is in
