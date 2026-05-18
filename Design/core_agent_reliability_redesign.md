@@ -777,7 +777,74 @@ The implementation should document the exact local commands after they are
 verified on Zach's Windows machine. Do not guess them in production docs before
 running them; Tailscale CLI details have changed before.
 
-#### 5.11.7 LAN fallback
+#### 5.11.7 Tailnet admission and anti-impersonation
+
+The design must prevent two different failures:
+
+1. An attacker or stale device joins/reaches the tailnet.
+2. A tailnet-reachable client messages Jo while masquerading as Zach.
+
+Tailscale membership is necessary but not sufficient. Purcival must enforce its
+own authenticated Zach session before any private route, chat message, or
+dashboard action is accepted.
+
+Tailnet controls:
+
+- Use Zach's own tailnet only; do not join this service to a shared or
+  organization-wide tailnet unless the access policy is reviewed again.
+- Enable MFA on the identity provider account used to administer the tailnet.
+- Enable device approval so new devices require explicit admin approval before
+  joining.
+- Remove stale devices immediately when a phone/laptop is replaced, lost, sold,
+  or no longer trusted.
+- Remove Tailscale's default broad allow-all policy before treating the tailnet
+  as a security boundary.
+- Add a least-privilege rule/grant that allows only Zach's approved personal
+  devices or Zach's user identity to reach the Purcival dashboard service.
+- Restrict by service port, not by broad host access, where Tailscale policy
+  supports it.
+- Do not share the Purcival desktop node or dashboard service with external
+  users.
+- Consider Tailnet Lock as a hardening step after the basic setup is stable.
+  It is not required for the first Phase E implementation, but it is the right
+  direction if Zach wants defense against an unexpectedly added node.
+
+Application controls:
+
+- All private routes must call a single auth dependency or middleware. Do not
+  rely on route authors remembering to check sessions one by one.
+- The dashboard session represents Zach. The actor must come from the verified
+  session, never from a form field, query parameter, header, or client-provided
+  JSON body.
+- Chat POSTs, inbox actions, and step mutations must reject unauthenticated
+  requests before parsing or applying user intent.
+- Receipts for dashboard-originated changes should record a stable actor such
+  as `zach_dashboard`, plus non-secret metadata such as timestamp and client
+  host for audit.
+- The app must not trust `X-Forwarded-User`, `X-Remote-User`, or similar
+  identity headers unless Purcival itself configures and validates the reverse
+  proxy that sets them. Phase E should avoid header-based identity entirely.
+- If a future Tailscale identity-aware proxy is adopted, it must be an
+  additional signal, not a replacement for Purcival's signed session unless the
+  design is explicitly reopened.
+
+First-implementation acceptance checks:
+
+- A tailnet device without a Purcival dashboard session is redirected to login.
+- A forged POST from a logged-in browser without CSRF is rejected.
+- A request that supplies `actor=zach` or an identity-looking header cannot
+  influence the recorded actor.
+- Removing the phone from the tailnet blocks network access even if the
+  dashboard cookie still exists on that phone.
+- Logging out clears the dashboard session even though the device remains on
+  the tailnet.
+
+This is the core answer to the impersonation concern: Tailscale decides whether
+a device can reach the private socket; Purcival decides whether the request is
+an authenticated Zach action. Jo should never accept "I am Zach" from network
+position or request text.
+
+#### 5.11.8 LAN fallback
 
 LAN mode exists for debugging or for a temporary no-Tailscale fallback, but it
 should not be the recommended mobile design.
@@ -795,7 +862,7 @@ Required LAN controls:
 LAN mode should log the active URL and a warning at startup. It should also be
 clearly reversible: stop the scheduled task and remove the firewall rule.
 
-#### 5.11.8 Windows startup and background work
+#### 5.11.9 Windows startup and background work
 
 Use Windows Task Scheduler for Phase E startup. Do not introduce NSSM, WinSW,
 pywin32, or a custom Windows service dependency yet.
@@ -842,7 +909,7 @@ overnight work can be considered complete. It should:
 Do not reuse `run_telegram.py` for this. Telegram is inactive and should not be
 the background-service anchor.
 
-#### 5.11.9 Mobile UX scope
+#### 5.11.10 Mobile UX scope
 
 Phase E mobile means "Zach can securely open the dashboard from his phone and
 act on cards." It does not mean native push notifications.
@@ -864,7 +931,7 @@ Deferred:
 - Homescreen/PWA packaging.
 - Telegram replacement.
 
-#### 5.11.10 Audit and observability
+#### 5.11.11 Audit and observability
 
 Access events should be visible enough to debug without logging secrets.
 
@@ -893,7 +960,7 @@ Consider adding `dashboard_login`, `dashboard_logout`, and
 security events belong in persona memory. Plain application logs are enough for
 the first implementation.
 
-#### 5.11.11 Implementation sequence
+#### 5.11.12 Implementation sequence
 
 Implement in this order:
 
@@ -902,20 +969,22 @@ Implement in this order:
 3. Add auth/session module and FastAPI middleware.
 4. Add login/logout templates and mobile styling.
 5. Add CSRF helpers and wire every mutating dashboard route.
-6. Add route tests for unauthenticated access, login, logout, CSRF rejection,
-   and authenticated HTMX/SSE behavior.
-7. Add a `run_dashboard` script or documented Uvicorn entrypoint that uses the
+6. Add tailnet setup notes covering device approval, least-privilege access
+   policy, and stale-device removal.
+7. Add route tests for unauthenticated access, login, logout, CSRF rejection,
+   authenticated HTMX/SSE behavior, and actor spoofing rejection.
+8. Add a `run_dashboard` script or documented Uvicorn entrypoint that uses the
    config layer.
-8. Add the non-Telegram Jo agent-loop runner.
-9. Add Windows Task Scheduler setup notes or scripts.
-10. Configure and manually verify Tailscale Serve from Zach's phone.
-11. Update `README.md`, `PROGRESS.md`, and this design doc with verified
+9. Add the non-Telegram Jo agent-loop runner.
+10. Add Windows Task Scheduler setup notes or scripts.
+11. Configure and manually verify Tailscale Serve from Zach's phone.
+12. Update `README.md`, `PROGRESS.md`, and this design doc with verified
     commands and acceptance results.
 
 Keep commits split if implementation gets large: auth/config first, startup
 runner second, Tailscale/ops docs third.
 
-#### 5.11.12 Test plan
+#### 5.11.13 Test plan
 
 Automated tests:
 
@@ -931,6 +1000,8 @@ Automated tests:
 - Mutating POST without CSRF returns `403`.
 - Mutating POST with CSRF preserves current behavior.
 - SSE chat stream requires auth and still filters hidden control tags.
+- Client-supplied actor fields or identity headers cannot affect the recorded
+  dashboard actor.
 
 Manual acceptance:
 
@@ -940,10 +1011,11 @@ Manual acceptance:
 - Login succeeds on the phone.
 - Inbox actions work on the phone and write the existing receipts.
 - Focused chat works on the phone.
+- Removing the phone from the tailnet blocks network access.
 - Reboot or logout/login restarts the dashboard and agent loop.
 - Disabling the scheduled tasks stops background access cleanly.
 
-#### 5.11.13 Acceptance criteria
+#### 5.11.14 Acceptance criteria
 
 The Phase E security/access slice is complete when:
 
@@ -951,12 +1023,15 @@ The Phase E security/access slice is complete when:
 - The app refuses unsafe non-loopback startup without auth.
 - Dashboard auth and CSRF protect all private routes and mutations.
 - Zach can open the dashboard from his phone over Tailscale.
+- Only approved Zach devices or Zach's identity can reach the dashboard service
+  at the tailnet policy layer.
+- Jo-facing dashboard actions cannot spoof their actor through request data.
 - No public internet tunnel or router port forwarding is required.
 - Windows startup runs the dashboard and Jo's scheduler loop without Telegram.
 - Overnight jobs can produce auditable events, opportunities, and inbox cards.
 - The setup is documented with commands verified on Zach's Windows machine.
 
-#### 5.11.14 Rollback
+#### 5.11.15 Rollback
 
 Rollback must be simple:
 
