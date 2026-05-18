@@ -71,6 +71,21 @@ AGENT_OPPORTUNITY_SUPPRESSION_STATUSES = {
     "blocked",
 }
 
+AGENT_INBOX_STATUSES = {
+    "unread",
+    "acted",
+    "dismissed",
+    "snoozed",
+    "expired",
+}
+
+AGENT_INBOX_SURFACES = {
+    "dashboard",
+    "chat",
+    "mobile_push",
+    "silent",
+}
+
 
 def _truncate_log_value(value: str | None, limit: int = 240) -> str | None:
     if value is None or len(value) <= limit:
@@ -368,6 +383,29 @@ class PersonaMemory:
                     CHECK (risk_level IN ('low', 'medium', 'high'))
                 );
 
+                CREATE TABLE IF NOT EXISTS agent_inbox_items (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    opportunity_id  INTEGER,
+                    priority        INTEGER NOT NULL,
+                    surface         TEXT NOT NULL,
+                    title           TEXT NOT NULL,
+                    body            TEXT NOT NULL,
+                    actions_json    TEXT NOT NULL DEFAULT '[]',
+                    status          TEXT NOT NULL DEFAULT 'unread',
+                    duplicate_key   TEXT NOT NULL,
+                    snoozed_until   TIMESTAMP,
+                    expires_at      TIMESTAMP,
+                    created_at      TIMESTAMP NOT NULL,
+                    updated_at      TIMESTAMP NOT NULL,
+
+                    CHECK (status IN (
+                        'unread', 'acted', 'dismissed', 'snoozed', 'expired'
+                    )),
+                    CHECK (surface IN (
+                        'dashboard', 'chat', 'mobile_push', 'silent'
+                    ))
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_messages_created
                     ON messages(created_at);
 
@@ -406,6 +444,15 @@ class PersonaMemory:
 
                 CREATE INDEX IF NOT EXISTS idx_agent_opportunities_goal
                     ON agent_opportunities(goal_id, status);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_inbox_items_status
+                    ON agent_inbox_items(surface, status, priority, updated_at);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_inbox_items_opportunity
+                    ON agent_inbox_items(opportunity_id, status);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_inbox_items_duplicate
+                    ON agent_inbox_items(duplicate_key, status);
             """)
             conn.commit()
         finally:
@@ -2062,6 +2109,238 @@ class PersonaMemory:
     ) -> str:
         normalized_title = " ".join(title.casefold().split())
         return f"{kind}:goal={goal_id or ''}:step={step_id or ''}:{normalized_title}"
+
+    # --- Agent Inbox Items ---
+
+    def add_agent_inbox_item(
+        self,
+        title: str,
+        body: str,
+        actions: list[dict] | None = None,
+        opportunity_id: int | None = None,
+        priority: int = 3,
+        surface: str = "dashboard",
+        status: str = "unread",
+        duplicate_key: str | None = None,
+        snoozed_until: str | None = None,
+        expires_at: str | None = None,
+    ) -> int:
+        """Create a dashboard delivery item and return its row id."""
+        self._validate_inbox_status(status)
+        self._validate_inbox_surface(surface)
+        priority = self._validate_opportunity_score(priority, "priority")
+        title = title.strip()
+        body = body.strip()
+        if not title:
+            raise ValueError("title cannot be empty")
+        if not body:
+            raise ValueError("body cannot be empty")
+        duplicate = duplicate_key or self._default_inbox_duplicate_key(
+            opportunity_id,
+            title,
+        )
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO agent_inbox_items
+                    (opportunity_id, priority, surface, title, body,
+                     actions_json, status, duplicate_key, snoozed_until,
+                     expires_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    opportunity_id,
+                    priority,
+                    surface,
+                    title,
+                    body,
+                    json.dumps(actions or [], ensure_ascii=True, sort_keys=True),
+                    status,
+                    duplicate,
+                    snoozed_until,
+                    expires_at,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def get_agent_inbox_item(self, item_id: int) -> dict | None:
+        """Return one inbox item by id."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM agent_inbox_items
+                WHERE id = ?
+                """,
+                (item_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_agent_inbox_item_by_duplicate_key(
+        self,
+        duplicate_key: str,
+    ) -> dict | None:
+        """Return the newest inbox item with this duplicate key."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM agent_inbox_items
+                WHERE duplicate_key = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (duplicate_key,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def list_agent_inbox_items(
+        self,
+        status: str | None = "unread",
+        surface: str | None = "dashboard",
+        limit: int = 20,
+    ) -> list[dict]:
+        """Return inbox items, highest priority first."""
+        clauses = []
+        params: list = []
+        if status is not None:
+            self._validate_inbox_status(status)
+            if status == "unread":
+                now_for_status = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                clauses.append(
+                    "(status = ? OR (status = 'snoozed' AND snoozed_until <= ?))"
+                )
+                params.extend([status, now_for_status])
+            else:
+                clauses.append("status = ?")
+                params.append(status)
+        if surface is not None:
+            self._validate_inbox_surface(surface)
+            clauses.append("surface = ?")
+            params.append(surface)
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        clauses.append("(snoozed_until IS NULL OR snoozed_until <= ?)")
+        params.append(now)
+        clauses.append("(expires_at IS NULL OR expires_at > ?)")
+        params.append(now)
+        where = "WHERE " + " AND ".join(clauses)
+        params.append(limit)
+
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM agent_inbox_items
+                {where}
+                ORDER BY priority DESC, updated_at DESC, id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def update_agent_inbox_item(
+        self,
+        item_id: int,
+        status: str | None = None,
+        priority: int | None = None,
+        title: str | None = None,
+        body: str | None = None,
+        actions: list[dict] | None = None,
+        snoozed_until: str | None = None,
+        expires_at: str | None = None,
+    ) -> bool:
+        """Update mutable delivery fields on an inbox item."""
+        existing = self.get_agent_inbox_item(item_id)
+        if existing is None:
+            return False
+
+        updates = []
+        params = []
+        if status is not None:
+            self._validate_inbox_status(status)
+            updates.append("status = ?")
+            params.append(status)
+        if priority is not None:
+            updates.append("priority = ?")
+            params.append(self._validate_opportunity_score(priority, "priority"))
+        if title is not None:
+            updates.append("title = ?")
+            params.append(title.strip())
+        if body is not None:
+            updates.append("body = ?")
+            params.append(body.strip())
+        if actions is not None:
+            updates.append("actions_json = ?")
+            params.append(json.dumps(actions, ensure_ascii=True, sort_keys=True))
+        if snoozed_until is not None:
+            updates.append("snoozed_until = ?")
+            params.append(snoozed_until)
+        if expires_at is not None:
+            updates.append("expires_at = ?")
+            params.append(expires_at)
+        if not updates:
+            return True
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        updates.append("updated_at = ?")
+        params.append(now)
+        params.append(item_id)
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                f"""
+                UPDATE agent_inbox_items
+                SET {", ".join(updates)}
+                WHERE id = ?
+                """,
+                params,
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def _validate_inbox_status(self, status: str):
+        if status not in AGENT_INBOX_STATUSES:
+            choices = ", ".join(sorted(AGENT_INBOX_STATUSES))
+            raise ValueError(
+                f"Invalid inbox status '{status}'. Expected one of: {choices}"
+            )
+
+    def _validate_inbox_surface(self, surface: str):
+        if surface not in AGENT_INBOX_SURFACES:
+            choices = ", ".join(sorted(AGENT_INBOX_SURFACES))
+            raise ValueError(
+                f"Invalid inbox surface '{surface}'. Expected one of: {choices}"
+            )
+
+    def _default_inbox_duplicate_key(
+        self,
+        opportunity_id: int | None,
+        title: str,
+    ) -> str:
+        if opportunity_id is not None:
+            return f"inbox:opportunity={opportunity_id}"
+        normalized_title = " ".join(title.casefold().split())
+        return f"inbox:title={normalized_title}"
 
     # --- Agent Actions ---
 

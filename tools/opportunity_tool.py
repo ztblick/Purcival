@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 
 from accountability import refresh_accountability_opportunities
+from delivery import deliver_opportunity_to_inbox
 from goals import SharedGoalStore
 from memory import (
     AGENT_OPPORTUNITY_SUPPRESSION_STATUSES,
@@ -245,6 +246,9 @@ class OpportunityTool(Tool):
                 "title": title,
             },
         )
+        delivered = self.memory.get_agent_opportunity(opportunity_id)
+        if delivered:
+            deliver_opportunity_to_inbox(self.memory, self.store, delivered)
         return (
             f"Recorded opportunity #{opportunity_id} and delivered suggested "
             f"step #{step_id} for goal #{goal_id}: {title}"

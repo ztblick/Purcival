@@ -179,6 +179,12 @@ h3 {
   overflow: hidden;
 }
 
+.inbox-list {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
 .goal-grid,
 .step-grid {
   display: grid;
@@ -212,6 +218,7 @@ h3 {
 
 .goal-card,
 .step-card,
+.inbox-card,
 .context-card {
   position: relative;
   display: flex;
@@ -228,6 +235,7 @@ h3 {
 
 .goal-card::before,
 .step-card::before,
+.inbox-card::before,
 .chat-panel::before {
   content: "";
   position: absolute;
@@ -239,6 +247,7 @@ h3 {
 
 .goal-card,
 .step-card,
+.inbox-card,
 .context-card {
   box-shadow:
     0 0 24px color-mix(in srgb, var(--category-accent, var(--purple)) 20%, transparent),
@@ -252,6 +261,61 @@ h3 {
     border-color 160ms ease,
     transform 160ms ease,
     box-shadow 160ms ease;
+}
+
+.inbox-card {
+  gap: 12px;
+  padding: 14px;
+  background:
+    linear-gradient(145deg, rgba(15, 31, 36, 0.92), rgba(17, 16, 24, 0.94)),
+    var(--panel);
+}
+
+.inbox-card__meta {
+  display: flex;
+}
+
+.inbox-card__body {
+  display: grid;
+  gap: 8px;
+}
+
+.inbox-card__body h3 {
+  font-size: 0.96rem;
+  line-height: 1.18;
+}
+
+.inbox-card__body p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.42;
+}
+
+.inbox-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.inbox-actions form {
+  margin: 0;
+}
+
+.inbox-button {
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0 10px;
+  color: rgba(242, 239, 231, 0.72);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.82rem;
+}
+
+.inbox-button--primary {
+  color: var(--green);
+  border-color: rgba(109, 255, 179, 0.36);
+  background: rgba(109, 255, 179, 0.08);
 }
 
 .goal-card:hover,

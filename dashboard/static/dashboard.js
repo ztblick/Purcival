@@ -403,6 +403,16 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const explicitChatButton = event.target.closest("button[data-chat-scope-type][data-chat-scope-id]");
+  if (explicitChatButton) {
+    event.preventDefault();
+    loadChatPanel(
+      explicitChatButton.getAttribute("data-chat-scope-type"),
+      explicitChatButton.getAttribute("data-chat-scope-id"),
+    );
+    return;
+  }
+
   if (event.target.closest("button, form, a, textarea, input")) {
     return;
   }

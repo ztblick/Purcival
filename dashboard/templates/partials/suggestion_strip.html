@@ -1,4 +1,16 @@
 <section id="steps-panel" class="suggestion-strip" aria-labelledby="suggestions-heading">
+  {% if inbox_items %}
+    <div class="section-heading">
+      <h2>Inbox</h2>
+    </div>
+
+    <div class="inbox-list" aria-label="Proactive inbox">
+      {% for item in inbox_items %}
+        {% include "partials/inbox_card.html" %}
+      {% endfor %}
+    </div>
+  {% endif %}
+
   <div class="section-heading">
     <h2 id="suggestions-heading">Steps</h2>
   </div>

@@ -14,6 +14,7 @@ import memory
 from dashboard import routes
 from dashboard.app import app
 from dashboard.motivation import MOTIVATIONAL_TITLES, title_for_date
+from delivery import deliver_opportunity_to_inbox
 from goals import SharedGoalStore
 from memory import MessageScope, PersonaMemory
 from scripts.seed_dev_data import seed_mockup_data
@@ -382,6 +383,82 @@ def test_step_complete_and_abandon_routes_write_receipts(tmp_path, monkeypatch):
     assert refreshed_store.get_step(abandoned_step_id)["status"] == "abandoned"
     assert len(mem.get_agent_events(event_type="step_completed")) == 1
     assert len(mem.get_agent_events(event_type="step_abandoned")) == 1
+
+
+def test_dashboard_renders_and_acts_on_inbox_card(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
+    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+
+    mem = PersonaMemory("jo")
+    goal = next(goal for goal in store.list_goals(status="active"))
+    step_id = store.create_step(
+        goal_id=goal["id"],
+        title="Pick one inbox-tested step",
+        status="suggested",
+        source="agent_planning",
+        created_by_persona="jo",
+    )
+    opportunity_id = mem.add_agent_opportunity(
+        kind="suggest_goal_step",
+        title="Pick one inbox-tested step",
+        rationale="A card should make this suggestion visible.",
+        goal_id=goal["id"],
+        step_id=step_id,
+        status="delivered",
+        urgency=3,
+        impact=4,
+        confidence=4,
+        attention_cost=1,
+        risk_level="low",
+    )
+    opportunity = mem.get_agent_opportunity(opportunity_id)
+    deliver_opportunity_to_inbox(mem, store, opportunity)
+
+    client = TestClient(app)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Inbox" in response.text
+    assert "Suggested step: Pick one inbox-tested step" in response.text
+    assert "Open chat" in response.text
+
+    item = mem.list_agent_inbox_items()[0]
+    accept_response = client.post(f"/inbox/{item['id']}/accept")
+    refreshed_mem = PersonaMemory("jo")
+
+    assert accept_response.status_code == 200
+    assert "accepted" in accept_response.text
+    assert SharedGoalStore(db_path).get_step(step_id)["status"] == "accepted"
+    assert refreshed_mem.get_agent_inbox_item(item["id"])["status"] == "acted"
+    assert refreshed_mem.list_agent_inbox_items() == []
+
+
+def test_dashboard_can_snooze_inbox_card(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
+    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+
+    mem = PersonaMemory("jo")
+    item_id = mem.add_agent_inbox_item(
+        priority=3,
+        surface="dashboard",
+        title="Check in",
+        body="A proactive card is ready.",
+        actions=[{"type": "snooze", "label": "Snooze"}],
+    )
+
+    client = TestClient(app)
+    response = client.post(f"/inbox/{item_id}/snooze")
+
+    refreshed = PersonaMemory("jo")
+    assert response.status_code == 200
+    assert "snoozed" in response.text
+    assert refreshed.get_agent_inbox_item(item_id)["status"] == "snoozed"
+    assert refreshed.list_agent_inbox_items() == []
 
 
 def test_title_for_date_is_stable_for_same_day():

@@ -10,8 +10,8 @@ agent sessions. Read it in full each session. Update sections marked
 
 **Last updated:** 2026-05-18
 **Active task:** Core agent reliability redesign
-**Phase:** Phase D - accountability slice implemented
-**Status:** The Goals dashboard task is closed as the primary development focus. Do not continue dashboard Phase 6 as previously scoped. The new primary focus is the plan in `Design/core_agent_reliability_redesign.md`: migrate the agent loop toward an event log, explicit job types, an opportunity queue, planner/policy/compiler separation, durable execution state, a dashboard delivery inbox, scoped capabilities, and an untrusted-content boundary before adding web/file/computer tools. Phase A safety/instrumentation is complete. Phase B added per-persona `agent_events`, explicit `agent_jobs`, `job_type` metadata on new planning triggers, job leases/retries/completion receipts, and durable tool-observation events before reasoning. Phase C added per-persona `agent_opportunities`, registered `OpportunityTool`, routed planning-cycle step suggestions through `opportunities.propose_goal_step`, created dashboard-visible suggested steps only after recording a delivered opportunity, and suppressed dismissed/rejected/blocked duplicate opportunities. Phase D now adds shared event-backed accountability receipts for step accept/reject/complete/abandon, creates scored `accountability_check` opportunities for accepted steps, refreshes stale accepted-step opportunities during planning, allows `SuggestionTool` trusted internal step writes, and lets focused step chat complete/abandon the active step through a narrow transitional internal-action block that is hidden from SSE and recorded as a visible receipt. Zach clarified that Purcival should have high autonomy over internal goals, steps, opportunities, dashboard cards, and inferred memory; the architecture should use receipts and correction paths rather than confirmation prompts for those internal writes.
+**Phase:** Phase E - delivery inbox slice implemented
+**Status:** The Goals dashboard task is closed as the primary development focus. Do not continue dashboard Phase 6 as previously scoped. The new primary focus is the plan in `Design/core_agent_reliability_redesign.md`: migrate the agent loop toward an event log, explicit job types, an opportunity queue, planner/policy/compiler separation, durable execution state, a dashboard delivery inbox, scoped capabilities, and an untrusted-content boundary before adding web/file/computer tools. Phase A safety/instrumentation is complete. Phase B added per-persona `agent_events`, explicit `agent_jobs`, `job_type` metadata on new planning triggers, job leases/retries/completion receipts, and durable tool-observation events before reasoning. Phase C added per-persona `agent_opportunities`, registered `OpportunityTool`, routed planning-cycle step suggestions through `opportunities.propose_goal_step`, created dashboard-visible suggested steps only after recording a delivered opportunity, and suppressed dismissed/rejected/blocked duplicate opportunities. Phase D added shared event-backed accountability receipts for step accept/reject/complete/abandon, scored `accountability_check` opportunities, trusted internal `SuggestionTool` writes, and narrow focused-chat completion/abandonment receipts. Phase E now adds the first local delivery-inbox slice: per-persona `agent_inbox_items`, dashboard inbox cards for delivered suggestions and stale accountability checks, accept/reject/done/abandon/open-chat/dismiss/snooze actions, and idempotent opportunity-to-card delivery. The mobile/auth/service portion of Phase E is still not implemented and remains security-design-gated. Zach clarified that Purcival should have high autonomy over internal goals, steps, opportunities, dashboard cards, and inferred memory; the architecture should use receipts and correction paths rather than confirmation prompts for those internal writes.
 
 ---
 
@@ -57,7 +57,10 @@ The core thesis:
    receipts in persona events, creates scored accountability opportunities for
    accepted steps, and keeps the chat internal-action path narrow until the
    Phase E delivery inbox/side channel exists.
-6. Next approval target: Phase E delivery inbox and mobile-ready dashboard.
+6. Review the Phase E implementation notes: the local delivery inbox exists,
+   but mobile access, auth, and Windows service startup are intentionally not
+   implemented yet.
+7. Next approval target: Phase E security/access slice.
 
 ### Do:
 
@@ -220,7 +223,7 @@ suggestions and confirms they feel better-tuned.
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-- **Core agent redesign Phase E kickoff.** Phase D's accountability slice is implemented. Next decision target: whether to proceed to Phase E by adding a dashboard-native delivery inbox/action side channel, proactive cards, snooze/open-chat actions, and the first secure mobile-readiness work. Design doc: `Design/core_agent_reliability_redesign.md`.
+- **Core agent redesign Phase E security/access slice.** The local delivery inbox slice is implemented. Next decision target: whether to proceed with a concrete secure-access design for basic auth, bind address, Windows startup/service, and Tailscale/private-network access before exposing the dashboard beyond localhost. Design doc: `Design/core_agent_reliability_redesign.md`.
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -235,6 +238,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-18 - Core agent reliability Phase E - added per-persona `agent_inbox_items`, delivered opportunity-backed dashboard inbox cards for suggestions and stale accountability checks, wired card actions through existing receipts, added snooze/dismiss/open-chat handling, and kept focused inbox/dashboard tests passing - committed.
 - 2026-05-18 - Core agent reliability Phase D - added event-backed accountability receipts for step status changes, scored `accountability_check` opportunities for accepted/stale steps, dashboard complete/abandon controls, focused-chat completion/abandonment receipts, and full pytest passing - committed.
 - 2026-05-18 - Core agent reliability Phase C - added per-persona `agent_opportunities`, registered `OpportunityTool`, routed planning-cycle step suggestions through opportunity records, delivered low-risk opportunities as dashboard-visible suggested steps, added duplicate suppression, and kept focused Phase C tests passing - committed.
 - 2026-05-18 - Core agent reliability Phase B - added per-persona `agent_events`, explicit `agent_jobs`, `job_type` trigger metadata, job leasing/retry/completion receipts, and durable tool observation events before reasoning; focused Phase B tests and full pytest pass - committed.
@@ -306,6 +310,7 @@ Append entries; never edit prior ones.
 - **2026-05-18 - Planning suggestions route through opportunities.** The planning prompt now asks for `opportunities.propose_goal_step`, and the agent loop routes legacy planning-cycle `suggestions.propose_suggestion` actions through the opportunity tool when available. This keeps old model behavior compatible while enforcing the new observation-to-opportunity-to-suggestion path.
 - **2026-05-18 - Phase D step accountability uses shared receipts.** Dashboard step controls, focused-chat internal actions, and `SuggestionTool` status updates now route through one receipt helper that writes `step_*` events with previous status, message/evidence links, and undo-status metadata. Accepted steps create scored `accountability_check` opportunities, and completed/abandoned steps advance linked opportunities.
 - **2026-05-18 - Focused-chat internal actions are a narrow transitional bridge.** The dashboard may suppress and apply `<internal_actions>` only for completing or abandoning the active step, with active-scope validation and visible receipts. This should not be expanded to broad tool use; Phase E should replace it with a proper delivery/action side channel or inbox.
+- **2026-05-18 - Phase E is split into local delivery first, secure access second.** The dashboard inbox can be implemented safely on localhost because it only acts on trusted internal state through existing receipts. Authentication, bind-address changes, Windows service setup, and Tailscale/mobile access remain a separate security slice and should not be slipped in casually.
 
 ---
 

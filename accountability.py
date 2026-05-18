@@ -103,8 +103,9 @@ def ensure_accountability_opportunity(
     if existing:
         if existing["status"] in {"completed", "rejected", "dismissed", "blocked"}:
             return int(existing["id"])
+        opportunity_id = int(existing["id"])
         memory.update_agent_opportunity(
-            int(existing["id"]),
+            opportunity_id,
             status=score["status"],
             urgency=score["urgency"],
             impact=score["impact"],
@@ -116,10 +117,16 @@ def ensure_accountability_opportunity(
                 "stale_hours": score["stale_hours"],
             },
         )
-        return int(existing["id"])
+        if score["status"] == "queued":
+            from delivery import deliver_opportunity_to_inbox
+
+            opportunity = memory.get_agent_opportunity(opportunity_id)
+            if opportunity:
+                deliver_opportunity_to_inbox(memory, store, opportunity)
+        return opportunity_id
 
     evidence = [source_event_id] if source_event_id is not None else []
-    return memory.add_agent_opportunity(
+    opportunity_id = memory.add_agent_opportunity(
         kind=ACCOUNTABILITY_KIND,
         title=f"Check in on accepted step: {step['title']}",
         rationale=(
@@ -139,6 +146,13 @@ def ensure_accountability_opportunity(
         duplicate_key=duplicate_key,
         deliver_after=score["deliver_after"],
     )
+    if score["status"] == "queued":
+        from delivery import deliver_opportunity_to_inbox
+
+        opportunity = memory.get_agent_opportunity(opportunity_id)
+        if opportunity:
+            deliver_opportunity_to_inbox(memory, store, opportunity)
+    return opportunity_id
 
 
 def refresh_accountability_opportunities(

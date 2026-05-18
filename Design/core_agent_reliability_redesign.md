@@ -1,6 +1,6 @@
 # Core Agent Reliability Redesign
 
-**Status:** Phase D accountability slice implemented
+**Status:** Phase E delivery inbox slice implemented
 **Date:** 2026-05-18
 **Scope:** reasoning, scheduling, action selection, learning, security, and proactive delivery
 
@@ -776,6 +776,23 @@ Acceptance:
 - Proactive suggestions appear as dashboard items without requiring Telegram.
 - Overnight work produces auditable events, opportunities, and morning-facing
   cards without requiring the desktop to be actively used.
+
+Implementation notes:
+
+- Phase E has begun with the safe local delivery slice. Per-persona
+  `agent_inbox_items` now stores dashboard delivery cards with priority,
+  surface, actions, duplicate keys, status, snooze state, and expiry.
+- Delivered `suggest_goal_step` opportunities now create idempotent dashboard
+  inbox cards with accept, reject, open-chat, and dismiss actions. Stale
+  queued `accountability_check` opportunities create dashboard inbox cards
+  with done, abandon, open-chat, and snooze actions.
+- Dashboard inbox cards render above the steps list. Acting from a card writes
+  through the same Phase D receipt path, marks the inbox item acted, and hides
+  it from the unread inbox. Snoozed cards are hidden until their snooze time.
+- This slice intentionally does not expose the dashboard beyond localhost,
+  add authentication, configure Windows service startup, or set up Tailscale.
+  Those are the next Phase E security slice and need a concrete access/auth
+  design before implementation.
 
 ### Phase F - Secure web and file tools
 

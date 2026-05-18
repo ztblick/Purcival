@@ -21,6 +21,7 @@ from accountability import format_receipt, record_step_status_change
 from agent import _parse_actions_json, strip_schedule_updates
 from context import DEVICE_TERMINAL, assemble_context
 from dashboard.motivation import title_for_date
+from delivery import decode_inbox_actions, mark_inbox_item, snooze_inbox_item
 from goals import SharedGoalStore
 from memory import MessageScope, PersonaMemory
 from summarizer import check_and_summarize
@@ -80,6 +81,7 @@ def get_provider() -> str | None:
 
 
 def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
+    memory = get_memory()
     goals = store.list_goals(status="active")
     steps = store.list_steps()
     goals_by_id = {goal["id"]: goal for goal in goals}
@@ -109,6 +111,7 @@ def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
         "suggestions": suggestions,
         "accepted_steps": accepted_steps,
         "visible_steps": suggestions + accepted_steps,
+        "inbox_items": build_inbox_cards(memory),
         "active_context": active_context,
         "chat_context": chat_context,
         "chat_messages": [],
@@ -116,6 +119,25 @@ def build_dashboard_model(store: SharedGoalStore) -> dict[str, Any]:
         "activity_receipt": None,
         "initial_title": title_for_date(),
     }
+
+
+def build_inbox_cards(memory: PersonaMemory) -> list[dict[str, Any]]:
+    cards = []
+    for item in memory.list_agent_inbox_items(status="unread", surface="dashboard"):
+        actions = decode_inbox_actions(item)
+        action_types = {action.get("type") for action in actions}
+        open_chat = next(
+            (action for action in actions if action.get("type") == "open_chat"),
+            None,
+        )
+        cards.append({
+            **item,
+            "actions": actions,
+            "action_types": action_types,
+            "open_chat": open_chat,
+            "priority_label": f"P{item['priority']}",
+        })
+    return cards
 
 
 def build_step_cards(
@@ -709,6 +731,90 @@ def create_chat_message(
         user_message_id=user_message_id,
     )
     return {"stream_id": stream_id, "message_id": user_message_id}
+
+
+def _require_inbox_item(memory: PersonaMemory, item_id: int) -> dict[str, Any]:
+    item = memory.get_agent_inbox_item(int(item_id))
+    if item is None:
+        raise HTTPException(status_code=404, detail="Inbox item not found")
+    return item
+
+
+def _require_inbox_step_action(
+    item: dict[str, Any],
+    action_type: str,
+) -> int:
+    for action in decode_inbox_actions(item):
+        if action.get("type") == action_type:
+            step_id = action.get("step_id")
+            if step_id is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Inbox action is missing a step id",
+                )
+            return int(step_id)
+    raise HTTPException(status_code=400, detail=f"Inbox item has no {action_type} action")
+
+
+def _render_inbox_step_update(
+    request: Request,
+    item_id: int,
+    action_type: str,
+    status: str,
+) -> Any:
+    store = get_store()
+    memory = get_memory()
+    item = _require_inbox_item(memory, item_id)
+    step_id = _require_inbox_step_action(item, action_type)
+    try:
+        receipt = record_step_status_change(
+            store=store,
+            memory=memory,
+            step_id=step_id,
+            status=status,
+            source="dashboard_inbox",
+            actor=get_dashboard_persona(),
+        )
+        mark_inbox_item(memory, item_id, "acted", reason=action_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return render_suggestion_strip(request, format_receipt(receipt))
+
+
+@router.post("/inbox/{item_id}/accept")
+def accept_inbox_item(item_id: int, request: Request):
+    return _render_inbox_step_update(request, item_id, "accept_step", "accepted")
+
+
+@router.post("/inbox/{item_id}/reject")
+def reject_inbox_item(item_id: int, request: Request):
+    return _render_inbox_step_update(request, item_id, "reject_step", "rejected")
+
+
+@router.post("/inbox/{item_id}/complete")
+def complete_inbox_item(item_id: int, request: Request):
+    return _render_inbox_step_update(request, item_id, "complete_step", "completed")
+
+
+@router.post("/inbox/{item_id}/abandon")
+def abandon_inbox_item(item_id: int, request: Request):
+    return _render_inbox_step_update(request, item_id, "abandon_step", "abandoned")
+
+
+@router.post("/inbox/{item_id}/dismiss")
+def dismiss_inbox_item(item_id: int, request: Request):
+    memory = get_memory()
+    _require_inbox_item(memory, item_id)
+    mark_inbox_item(memory, item_id, "dismissed", reason="dashboard_dismiss")
+    return render_suggestion_strip(request, "Inbox item dismissed.")
+
+
+@router.post("/inbox/{item_id}/snooze")
+def snooze_dashboard_inbox_item(item_id: int, request: Request):
+    memory = get_memory()
+    _require_inbox_item(memory, item_id)
+    snooze_inbox_item(memory, item_id, hours=24)
+    return render_suggestion_strip(request, "Inbox item snoozed until tomorrow.")
 
 
 @router.post("/steps/{step_id}/accept")

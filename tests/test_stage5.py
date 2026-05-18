@@ -388,6 +388,32 @@ class TestAgentOpportunities:
         assert opportunity["urgency"] >= 3
 
 
+class TestAgentInboxItems:
+    def setup_method(self):
+        self.tmpdir = tempfile.mkdtemp()
+        with patch("memory.DATA_DIR", Path(self.tmpdir)):
+            self.memory = PersonaMemory("test_persona")
+
+    def test_add_list_and_update_inbox_item(self):
+        item_id = self.memory.add_agent_inbox_item(
+            opportunity_id=12,
+            priority=4,
+            surface="dashboard",
+            title="Suggested step",
+            body="A useful next action is ready.",
+            actions=[{"type": "open_chat", "scope_type": "step", "scope_id": 7}],
+        )
+
+        listed = self.memory.list_agent_inbox_items()
+        assert listed[0]["id"] == item_id
+        assert listed[0]["status"] == "unread"
+        assert json.loads(listed[0]["actions_json"])[0]["type"] == "open_chat"
+
+        assert self.memory.update_agent_inbox_item(item_id, status="dismissed")
+        assert self.memory.list_agent_inbox_items() == []
+        assert self.memory.get_agent_inbox_item(item_id)["status"] == "dismissed"
+
+
 class TestScheduleConfigMigration:
     def setup_method(self):
         self.tmpdir = tempfile.mkdtemp()

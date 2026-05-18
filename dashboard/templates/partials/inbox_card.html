@@ -1,0 +1,47 @@
+<article class="inbox-card" data-inbox-item-id="{{ item.id }}">
+  <div class="inbox-card__meta">
+    <span class="card-tag card-tag--small">{{ item.priority_label }}</span>
+  </div>
+  <div class="inbox-card__body">
+    <h3>{{ item.title }}</h3>
+    <p>{{ item.body }}</p>
+  </div>
+  <div class="inbox-actions" aria-label="Inbox actions">
+    {% if "accept_step" in item.action_types %}
+      <form hx-post="/inbox/{{ item.id }}/accept" hx-target="#steps-panel" hx-swap="outerHTML">
+        <button class="inbox-button inbox-button--primary" type="submit">Accept</button>
+      </form>
+    {% endif %}
+    {% if "reject_step" in item.action_types %}
+      <form hx-post="/inbox/{{ item.id }}/reject" hx-target="#steps-panel" hx-swap="outerHTML">
+        <button class="inbox-button" type="submit">Reject</button>
+      </form>
+    {% endif %}
+    {% if "complete_step" in item.action_types %}
+      <form hx-post="/inbox/{{ item.id }}/complete" hx-target="#steps-panel" hx-swap="outerHTML">
+        <button class="inbox-button inbox-button--primary" type="submit">Done</button>
+      </form>
+    {% endif %}
+    {% if "abandon_step" in item.action_types %}
+      <form hx-post="/inbox/{{ item.id }}/abandon" hx-target="#steps-panel" hx-swap="outerHTML">
+        <button class="inbox-button" type="submit">Abandon</button>
+      </form>
+    {% endif %}
+    {% if item.open_chat %}
+      <button
+        class="inbox-button"
+        type="button"
+        data-chat-scope-type="{{ item.open_chat.scope_type }}"
+        data-chat-scope-id="{{ item.open_chat.scope_id }}"
+      >Open chat</button>
+    {% endif %}
+    {% if "snooze" in item.action_types %}
+      <form hx-post="/inbox/{{ item.id }}/snooze" hx-target="#steps-panel" hx-swap="outerHTML">
+        <button class="inbox-button" type="submit">Snooze</button>
+      </form>
+    {% endif %}
+    <form hx-post="/inbox/{{ item.id }}/dismiss" hx-target="#steps-panel" hx-swap="outerHTML">
+      <button class="inbox-button" type="submit">Dismiss</button>
+    </form>
+  </div>
+</article>

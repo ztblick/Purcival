@@ -161,6 +161,7 @@ def test_opportunity_tool_records_and_delivers_goal_step(tmp_path, monkeypatch):
     opportunities = memory.list_agent_opportunities(kind="suggest_goal_step")
     steps = store.list_steps(goal_id=goal_id, status="suggested")
     events = memory.get_agent_events(event_type="opportunity_delivered")
+    inbox_items = memory.list_agent_inbox_items()
 
     assert "Recorded opportunity" in result
     assert len(opportunities) == 1
@@ -170,6 +171,8 @@ def test_opportunity_tool_records_and_delivers_goal_step(tmp_path, monkeypatch):
     assert steps[0]["title"] == "Draft three alignment questions"
     assert steps[0]["source"] == "agent_planning"
     assert len(events) == 1
+    assert len(inbox_items) == 1
+    assert "Suggested step" in inbox_items[0]["title"]
 
 
 def test_suggestion_tool_status_update_writes_receipt_event(tmp_path, monkeypatch):
@@ -219,6 +222,36 @@ def test_accepting_step_creates_accountability_opportunity(tmp_path, monkeypatch
     assert opportunities[0]["step_id"] == step_id
     assert opportunities[0]["status"] in {"scheduled", "queued"}
     assert len(events) == 1
+
+
+def test_stale_accountability_opportunity_creates_inbox_item(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+
+    from accountability import refresh_accountability_opportunities
+
+    store = make_store(tmp_path)
+    goal_id = store.create_goal("health", "Stay active & healthy")
+    step_id = store.create_step(goal_id, "Take a twenty minute walk", status="accepted")
+    old_timestamp = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = store._connect()
+    conn.execute(
+        """
+        UPDATE steps
+        SET accepted_at = ?, last_touched_at = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (old_timestamp, old_timestamp, old_timestamp, step_id),
+    )
+    conn.commit()
+    conn.close()
+    memory = make_memory(tmp_path, monkeypatch)
+
+    refresh_accountability_opportunities(memory, store)
+
+    inbox_items = memory.list_agent_inbox_items()
+    assert len(inbox_items) == 1
+    assert "Check in" in inbox_items[0]["title"]
+    assert "twenty minute walk" in inbox_items[0]["title"]
 
 
 def test_opportunity_tool_suppresses_dismissed_repeat(tmp_path, monkeypatch):
