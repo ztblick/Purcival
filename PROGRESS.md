@@ -9,13 +9,77 @@ agent sessions. Read it in full each session. Update sections marked
 ## Current focus                                          *updatable*
 
 **Last updated:** 2026-05-17
-**Active task:** Goals dashboard — local web app with goal/step tracking and proactive suggestions
-**Phase:** Pre-Phase 6 cleanup — dashboard chat control-tag leak
-**Status:** Zach rejected editable step categories for v1: each step belongs to one goal, each goal belongs to one category, and step category tags are display-only inherited labels. Phase 5 is otherwise complete. One issue demands attention before Phase 6: focused dashboard chat can stream raw `<schedule_updates>` control tags before the saved message is stripped, and the stripped schedule action is not applied. Fix that chat plumbing before adding Phase 6 chat-based accountability actions.
+**Active task:** Core agent reliability redesign
+**Phase:** Phase A — final design freeze and handoff prep
+**Status:** The Goals dashboard task is closed as the primary development focus. Do not continue dashboard Phase 6 as previously scoped, and do not separately fix the dashboard schedule-update streaming leak; the upcoming agent redesign may replace that control path. The new primary focus is the plan in `Design/core_agent_reliability_redesign.md`: finalize the design freeze, then begin migrating the agent loop toward an event log, explicit job types, an opportunity queue, planner/policy/compiler separation, durable execution state, a dashboard delivery inbox, scoped capabilities, and an untrusted-content boundary before adding web/file/computer tools. Zach clarified that Purcival should have high autonomy over internal goals, steps, opportunities, dashboard cards, and inferred memory; the architecture should use receipts and correction paths rather than confirmation prompts for those internal writes.
 
 ---
 
-## Active task — Goals dashboard
+## Active task — Core agent reliability redesign
+
+### What this is
+
+Purcival is moving from "AI chatbot with tools and memory" toward a trusted
+self-hosted assistant that learns from conversation, maintains durable goals
+and commitments, proactively identifies useful opportunities, schedules its
+own work, and safely uses tools such as calendar, Gmail, web search, and local
+file search.
+
+The canonical design doc for this next chapter is:
+
+- `Design/core_agent_reliability_redesign.md`
+
+The core thesis:
+
+- The current one-shot prompt/action loop is too fused: one model response can
+  reason, schedule, mutate state, and act.
+- The next architecture needs durable events, explicit jobs, opportunities,
+  policy gates, action compilation, execution receipts, and dashboard-visible
+  correction paths.
+- Internal goal/step/memory/dashboard state is trusted and autonomous.
+  External actions and broad computer capabilities remain separate trust
+  boundaries.
+
+### Immediate handoff instructions
+
+1. Read `Design/core_agent_reliability_redesign.md` in full.
+2. Do one final Phase A design-freeze pass:
+   - tighten the event/job/opportunity schema decisions,
+   - define the dashboard receipt/undo/correction UX for autonomous internal
+     writes,
+   - confirm the first implementation slice,
+   - note any remaining open questions for Zach.
+3. Stop for Zach's review before production implementation if the design
+   changes materially.
+4. After approval, implement the smallest migration slice first: event log plus
+   explicit job type, preserving existing agent behavior.
+
+### Phase A scope
+
+Do:
+
+- Treat `Design/core_agent_reliability_redesign.md` as the active design doc.
+- Prepare the repo for a fresh Codex handoff.
+- Clarify schema and migration boundaries.
+- Keep the Goals dashboard as supporting UI/state, not the active project.
+- Preserve the existing dashboard schedule-update leak as a known symptom of
+  the old control channel; do not fix it separately unless Zach reopens it.
+
+Do not:
+
+- Continue Goals dashboard Phase 6 as previously written.
+- Add web search or local file search before the capability and untrusted
+  content model is designed.
+- Add production code before the final design freeze is accepted.
+
+---
+
+## Completed project — Goals dashboard reference
+
+This section is retained as historical/reference context for the dashboard
+features that were already built. It is not the active project. The old
+dashboard Phase 6 and Phase 7 plans are superseded by the core agent redesign
+unless Zach explicitly reopens them.
 
 ### What this is
 
@@ -124,31 +188,40 @@ Acceptance: a real planning cycle produces sensible suggestions visible on the d
   many-to-many step/category join table, or step re-parenting flow unless Zach
   explicitly reopens richer taxonomy work later.
 
-**Phase 6 — Accountability**
+**Phase 6 — Accountability (superseded)**
 
-Accepted steps (`status='accepted'`) surface in the agent's reasoning context for *every* cycle, not just planning. The agent can reference them in regular conversation ("how'd that yoga class go?"). Steps can be marked `completed` or `abandoned` from the UI (button on the card) or from chat (the agent infers from conversation and calls `SuggestionTool.update_status` after explicit confirmation — never silently). Stale steps (accepted but no progress for N days) get surfaced more prominently in the planning prompt as reminder candidates.
+This old plan is not active. Accountability should be rebuilt through the
+event/job/opportunity architecture in `Design/core_agent_reliability_redesign.md`.
+Do not implement the old approach of adding accepted steps to every prompt and
+mutating status through hidden chat control tags.
 
-Acceptance: end-to-end test of "accept a step, ignore it, see it referenced in next chat, mark it done."
+Historical acceptance target was: end-to-end test of "accept a step, ignore it,
+see it referenced in next chat, mark it done." The redesigned version should
+meet that behavior through events, opportunities, receipts, and reversible
+internal writes.
 
-**Phase 7 — Feedback loop polish**
+**Phase 7 — Feedback loop polish (superseded)**
 
-Aggregated feedback (acceptance and rejection rates per category/pattern) gets summarized into the planning prompt: e.g., "Zach has accepted N of M suggestions tagged Health and rejected most Money suggestions." Text summarization at this stage — not a fine-tuned scorer.
+This old plan is not active. Feedback learning should be handled by the
+redesigned event and reflection path.
 
-Acceptance: subjective — Zach reviews the next week's suggestions and confirms they feel better-tuned.
+Historical acceptance target was subjective: Zach reviews the next week's
+suggestions and confirms they feel better-tuned.
 
 ---
 
 ## Open questions for Zach                               *updatable*
 
-(None pending for the goals dashboard. The architectural scoping question
-above is for Codex's design phase, not for Zach — Codex proposes a concrete
-answer in the design doc, Zach reviews.)
+- Final Phase A design freeze needs one focused review: what exact
+  receipt/undo/correction UX should the dashboard provide for autonomous
+  internal writes such as created goals, modified goals, completed steps,
+  abandoned steps, and learned memories?
 
 ---
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-(None pending. The step-category decision is recorded; pre-Phase 6 cleanup is an implementation task, not a design decision.)
+- **Core agent redesign Phase A design freeze.** Zach answered the first design questions: Purcival should have high autonomy over internal goal/step/memory/dashboard state, chat remains the primary interaction surface, secure mobile access has no preferred mechanism, future file read scope can cover the main user directory excluding system/sensitive areas, overnight work is encouraged, and inferred memory does not need routine confirmation. Remaining approval target: freeze the revised event/job/opportunity architecture and the dashboard receipt/undo/correction UX for autonomous internal writes, then begin the first implementation slice. Design doc: `Design/core_agent_reliability_redesign.md`.
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -163,6 +236,8 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-17 - Project focus transition - marked the Goals dashboard as closed as the primary development task, made `Design/core_agent_reliability_redesign.md` the active design doc, instructed future sessions not to separately fix the dashboard schedule-update streaming leak, and prepared for a Phase A design-freeze handoff - awaiting final design freeze.
+- 2026-05-17 - Core agent reliability redesign - paused Goals dashboard Phase 6 for a design checkpoint and drafted `Design/core_agent_reliability_redesign.md`, then incorporated Zach's answers on internal autonomy, secure mobile access, broad future user-directory reads, overnight work, and trusted inferred memory; `pytest` and `python -m pytest` could not run because pytest is not installed in the active Python - awaiting revised architecture/receipt UX approval.
 - 2026-05-17 - Goals dashboard step-category decision - recorded Zach's decision that step category tags are display-only inherited labels; no editable step categories, independent step category field, category table, join table, or step re-parenting flow in v1 - committed.
 - 2026-05-17 - Goals dashboard step-category design - proposed treating editable step categories as moving a step to another active goal, preserving goal-owned categories and deferring independent step taxonomy - awaiting review.
 - 2026-05-17 - Goals dashboard Phase 5 - added GoalTool and SuggestionTool, registered them with the agent loop, planning-gated suggestion generation, and verified a planning cycle can create dashboard-visible suggested steps - committed.
@@ -214,6 +289,12 @@ Append entries; never edit prior ones.
 - **2026-05-17 — Goals dashboard feedback is accept/reject only.** Zach clarified that ✓ means the suggestion was good enough to accept, ✕ means it was bad enough to reject, and Jo should infer why from context rather than asking for thumbs or rejection reasons.
 - **2026-05-17 - Step category editing is design-gated.** Step cards may display the inherited goal category immediately, but changing a step's category or assigning multiple categories affects the current `category -> goal -> step` model and needs a design update before production code.
 - **2026-05-17 - Step category tags are display-only in v1.** Zach rejected editable step categories as more trouble than they are worth. Each step belongs to one goal, each goal belongs to one category, and a step's category tag is inherited from its parent goal. Do not add independent step categories, category tables, join tables, or step re-parenting flows in v1.
+- **2026-05-17 - Purcival may autonomously mutate internal goal and step state.** Zach clarified that the chat is the primary app interface and that Purcival should reason from conversation to create goals, modify goals, complete steps, or abandon steps without routine confirmation. This applies to trusted internal state; external actions remain a separate trust boundary.
+- **2026-05-17 - Proactive dashboard cards and opportunities are trusted internal writes.** Purcival may create opportunities and dashboard cards on its own initiative. The design should favor evidence, receipts, and correction over approval prompts for these internal actions.
+- **2026-05-17 - Mobile access path is implementation-flexible but must be secure.** Zach has no preference for Tailscale or another option as long as the selected path is secure. The implementation should justify the access model before exposing the dashboard beyond localhost.
+- **2026-05-17 - Future file read scope may cover the user's main directory.** Purcival may eventually receive read access across `C:\Users\ztbli`, excluding system files and explicitly sensitive locations. Write access is separate and not implied.
+- **2026-05-17 - Overnight work and inferred memory are allowed.** Purcival may do silent research, indexing, reflection, and planning overnight, and Zach is comfortable waking up to useful notifications. Purcival should infer important long-term memories from conversation without routine confirmation.
+- **2026-05-17 - Core agent redesign supersedes Goals dashboard Phase 6 as primary work.** The Goals dashboard is no longer the active project. Do not continue the old Phase 6 accountability plan or separately fix the dashboard schedule-update streaming leak unless Zach reopens it; the redesign may replace that control path.
 
 ---
 
@@ -223,7 +304,7 @@ Append entries; never edit prior ones.
 
 - **Trigger-deletion bug.** Some agent-scheduled triggers have been found deleted between cycles with no corresponding cancel commands in the reasoning log. Root cause unknown. Investigation, not a quick patch.
 - **Telegram `/status` model display drift.** `telegram_bot.py` still references removed `config.CLAUDE_MODEL` / `config.OLLAMA_MODEL` names after the per-task provider refactor. Fix later by routing status display through the same task-model lookup used by the CLI.
-- **Dashboard focused chat leaks schedule update control tags while streaming.** The SSE stream sends raw assistant chunks before `strip_schedule_updates()` runs, so `<schedule_updates>...</schedule_updates>` can briefly appear in the UI; the persisted message is clean after reload. The dashboard also ignores the stripped actions instead of applying or explicitly rejecting them. Fix before Phase 6 because chat-based accountability actions will rely on clean control/action handling.
+- **Dashboard focused chat leaks schedule update control tags while streaming.** The SSE stream sends raw assistant chunks before `strip_schedule_updates()` runs, so `<schedule_updates>...</schedule_updates>` can briefly appear in the UI; the persisted message is clean after reload. The dashboard also ignores the stripped actions instead of applying or explicitly rejecting them. Do not fix this as a standalone task right now; the core agent redesign is expected to replace hidden streamed control tags with a safer event/action path.
 
 ### Deferred work (related to current and recent projects)
 
@@ -245,6 +326,7 @@ Append entries; never edit prior ones.
 
 - `AGENTS.md` — operating manual
 - `Design/PURCIVAL_DESIGN_DOC.md` — overall system design (living)
+- `Design/core_agent_reliability_redesign.md` — active redesign doc for the next development chapter
 - `Design/agent_loop_design.md` — agent loop architecture
 - `Design/openai_integration_design.md` — OpenAI integration design (completed)
 - `Design/dashboard_goals_design.md` — Goals dashboard design
