@@ -253,6 +253,13 @@ class ScheduleTool(Tool):
             context=context,
             recurring=None,
         )
+        logger.info(
+            "schedule_tool_added_wakeup id=%s fire_at=%s purpose=%s tools=%s",
+            trigger_id,
+            fire_at,
+            purpose,
+            tools,
+        )
 
         return f"Scheduled wake-up #{trigger_id} at {time}: {purpose}"
 
@@ -280,10 +287,25 @@ class ScheduleTool(Tool):
             new_fire_at = self._validate_time(time)
 
         self.memory.update_trigger(id, new_fire_at, new_context)
+        logger.info(
+            "schedule_tool_modified_wakeup id=%s old_fire_at=%s new_fire_at=%s "
+            "purpose=%s tools=%s",
+            id,
+            trigger["fire_at"],
+            new_fire_at,
+            ctx.get("purpose"),
+            ctx.get("tools", []),
+        )
         return f"Modified wake-up #{id}"
 
     def _cancel_wakeup(self, id: int) -> str:
         """Cancel a scheduled wake-up with validation."""
-        self._validate_trigger_exists(id)
+        trigger = self._validate_trigger_exists(id)
         self.memory.delete_trigger(id)
+        logger.info(
+            "schedule_tool_cancelled_wakeup id=%s fire_at=%s context=%s",
+            id,
+            trigger.get("fire_at"),
+            trigger.get("context"),
+        )
         return f"Cancelled wake-up #{id}"

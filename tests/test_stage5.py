@@ -12,6 +12,7 @@ Tests cover:
 """
 
 import json
+import logging
 import sys
 import tempfile
 from datetime import datetime, timedelta
@@ -187,6 +188,36 @@ class TestTriggerOperations:
         trigger = self.memory.get_trigger(tid)
         assert trigger["fire_at"] == "2026-12-25 14:00:00"
         assert trigger["context"] == '{"purpose": "new"}'
+
+    def test_delete_trigger_logs_snapshot(self):
+        records = []
+
+        class CaptureHandler(logging.Handler):
+            def emit(self, record):
+                records.append(record.getMessage())
+
+        logger = logging.getLogger("memory")
+        old_level = logger.level
+        handler = CaptureHandler()
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        try:
+            tid = self.memory.add_trigger(
+                "agent_cycle",
+                "2026-12-25 10:00:00",
+                '{"purpose": "delete logging test", "tools": []}',
+            )
+            self.memory.delete_trigger(tid)
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+
+        assert any(
+            "trigger_deleted" in message
+            and f"id={tid}" in message
+            and "delete logging test" in message
+            for message in records
+        )
 
 
 # =========================================================================

@@ -10,8 +10,8 @@ agent sessions. Read it in full each session. Update sections marked
 
 **Last updated:** 2026-05-17
 **Active task:** Core agent reliability redesign
-**Phase:** Phase A — final design freeze and handoff prep
-**Status:** The Goals dashboard task is closed as the primary development focus. Do not continue dashboard Phase 6 as previously scoped, and do not separately fix the dashboard schedule-update streaming leak; the upcoming agent redesign may replace that control path. The new primary focus is the plan in `Design/core_agent_reliability_redesign.md`: finalize the design freeze, then begin migrating the agent loop toward an event log, explicit job types, an opportunity queue, planner/policy/compiler separation, durable execution state, a dashboard delivery inbox, scoped capabilities, and an untrusted-content boundary before adding web/file/computer tools. Zach clarified that Purcival should have high autonomy over internal goals, steps, opportunities, dashboard cards, and inferred memory; the architecture should use receipts and correction paths rather than confirmation prompts for those internal writes.
+**Phase:** Phase A — safety/instrumentation slice complete
+**Status:** The Goals dashboard task is closed as the primary development focus. Do not continue dashboard Phase 6 as previously scoped. The new primary focus is the plan in `Design/core_agent_reliability_redesign.md`: migrate the agent loop toward an event log, explicit job types, an opportunity queue, planner/policy/compiler separation, durable execution state, a dashboard delivery inbox, scoped capabilities, and an untrusted-content boundary before adding web/file/computer tools. Zach approved beginning Phase A implementation; the dashboard schedule-update streaming leak has been fixed locally as a safety bug, and trigger/schedule mutations now have explicit logging for investigation. No new production architecture has been added yet. Zach clarified that Purcival should have high autonomy over internal goals, steps, opportunities, dashboard cards, and inferred memory; the architecture should use receipts and correction paths rather than confirmation prompts for those internal writes.
 
 ---
 
@@ -43,16 +43,15 @@ The core thesis:
 ### Immediate handoff instructions
 
 1. Read `Design/core_agent_reliability_redesign.md` in full.
-2. Do one final Phase A design-freeze pass:
-   - tighten the event/job/opportunity schema decisions,
-   - define the dashboard receipt/undo/correction UX for autonomous internal
-     writes,
-   - confirm the first implementation slice,
-   - note any remaining open questions for Zach.
-3. Stop for Zach's review before production implementation if the design
-   changes materially.
-4. After approval, implement the smallest migration slice first: event log plus
-   explicit job type, preserving existing agent behavior.
+2. Review the Phase A implementation notes and keep the safety/instrumentation
+   work scoped: dashboard hidden controls are suppressed, trigger/schedule
+   instrumentation is logging only, and no new production architecture exists
+   yet.
+3. Before Phase B, tighten the event/job/opportunity schema decisions and
+   define the dashboard receipt/undo/correction UX for autonomous internal
+   writes.
+4. Next approval target: implement the smallest Phase B migration slice first,
+   event log plus explicit job type, preserving existing agent behavior.
 
 ### Phase A scope
 
@@ -61,9 +60,11 @@ Do:
 - Treat `Design/core_agent_reliability_redesign.md` as the active design doc.
 - Prepare the repo for a fresh Codex handoff.
 - Clarify schema and migration boundaries.
+- Keep the dashboard streaming-control-tag fix scoped to local suppression of
+  the old hidden control channel.
+- Keep trigger/schedule instrumentation as logs until the Phase B event log
+  exists.
 - Keep the Goals dashboard as supporting UI/state, not the active project.
-- Preserve the existing dashboard schedule-update leak as a known symptom of
-  the old control channel; do not fix it separately unless Zach reopens it.
 
 Do not:
 
@@ -212,7 +213,7 @@ suggestions and confirms they feel better-tuned.
 
 ## Open questions for Zach                               *updatable*
 
-- Final Phase A design freeze needs one focused review: what exact
+- Before Phase B, one focused review remains: what exact
   receipt/undo/correction UX should the dashboard provide for autonomous
   internal writes such as created goals, modified goals, completed steps,
   abandoned steps, and learned memories?
@@ -221,7 +222,7 @@ suggestions and confirms they feel better-tuned.
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-- **Core agent redesign Phase A design freeze.** Zach answered the first design questions: Purcival should have high autonomy over internal goal/step/memory/dashboard state, chat remains the primary interaction surface, secure mobile access has no preferred mechanism, future file read scope can cover the main user directory excluding system/sensitive areas, overnight work is encouraged, and inferred memory does not need routine confirmation. Remaining approval target: freeze the revised event/job/opportunity architecture and the dashboard receipt/undo/correction UX for autonomous internal writes, then begin the first implementation slice. Design doc: `Design/core_agent_reliability_redesign.md`.
+- **Core agent redesign Phase B kickoff.** Phase A safety/instrumentation is complete. Zach answered the first design questions: Purcival should have high autonomy over internal goal/step/memory/dashboard state, chat remains the primary interaction surface, secure mobile access has no preferred mechanism, future file read scope can cover the main user directory excluding system/sensitive areas, overnight work is encouraged, and inferred memory does not need routine confirmation. Remaining approval target: begin Phase B's smallest migration slice: append-only `agent_events` plus explicit job type metadata while preserving existing agent behavior. Design doc: `Design/core_agent_reliability_redesign.md`.
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -236,6 +237,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-17 - Core agent reliability Phase A - fixed dashboard SSE filtering so hidden `<schedule_updates>` control blocks cannot stream even across split chunks, added trigger/schedule mutation logging, documented Phase A implementation status, and verified the full pytest suite passes - committed.
 - 2026-05-17 - Project focus transition - marked the Goals dashboard as closed as the primary development task, made `Design/core_agent_reliability_redesign.md` the active design doc, instructed future sessions not to separately fix the dashboard schedule-update streaming leak, and prepared for a Phase A design-freeze handoff - awaiting final design freeze.
 - 2026-05-17 - Core agent reliability redesign - paused Goals dashboard Phase 6 for a design checkpoint and drafted `Design/core_agent_reliability_redesign.md`, then incorporated Zach's answers on internal autonomy, secure mobile access, broad future user-directory reads, overnight work, and trusted inferred memory; `pytest` and `python -m pytest` could not run because pytest is not installed in the active Python - awaiting revised architecture/receipt UX approval.
 - 2026-05-17 - Goals dashboard step-category decision - recorded Zach's decision that step category tags are display-only inherited labels; no editable step categories, independent step category field, category table, join table, or step re-parenting flow in v1 - committed.
@@ -295,6 +297,8 @@ Append entries; never edit prior ones.
 - **2026-05-17 - Future file read scope may cover the user's main directory.** Purcival may eventually receive read access across `C:\Users\ztbli`, excluding system files and explicitly sensitive locations. Write access is separate and not implied.
 - **2026-05-17 - Overnight work and inferred memory are allowed.** Purcival may do silent research, indexing, reflection, and planning overnight, and Zach is comfortable waking up to useful notifications. Purcival should infer important long-term memories from conversation without routine confirmation.
 - **2026-05-17 - Core agent redesign supersedes Goals dashboard Phase 6 as primary work.** The Goals dashboard is no longer the active project. Do not continue the old Phase 6 accountability plan or separately fix the dashboard schedule-update streaming leak unless Zach reopens it; the redesign may replace that control path.
+- **2026-05-17 - Phase A local leak fix suppresses old hidden schedule controls rather than applying them.** The dashboard now filters `<schedule_updates>` blocks before streaming or persisting focused chat responses. It intentionally does not execute those schedule actions from the dashboard; future state changes should use the redesigned event/action path with receipts.
+- **2026-05-17 - Phase A trigger instrumentation is logging, not the event log.** Schedule config changes, trigger mutations, planning-cycle reschedules, bulk trigger clears, and `ScheduleTool` mutations now write explicit logs for investigation. The durable append-only event substrate remains Phase B work.
 
 ---
 
@@ -304,7 +308,6 @@ Append entries; never edit prior ones.
 
 - **Trigger-deletion bug.** Some agent-scheduled triggers have been found deleted between cycles with no corresponding cancel commands in the reasoning log. Root cause unknown. Investigation, not a quick patch.
 - **Telegram `/status` model display drift.** `telegram_bot.py` still references removed `config.CLAUDE_MODEL` / `config.OLLAMA_MODEL` names after the per-task provider refactor. Fix later by routing status display through the same task-model lookup used by the CLI.
-- **Dashboard focused chat leaks schedule update control tags while streaming.** The SSE stream sends raw assistant chunks before `strip_schedule_updates()` runs, so `<schedule_updates>...</schedule_updates>` can briefly appear in the UI; the persisted message is clean after reload. The dashboard also ignores the stripped actions instead of applying or explicitly rejecting them. Do not fix this as a standalone task right now; the core agent redesign is expected to replace hidden streamed control tags with a safer event/action path.
 
 ### Deferred work (related to current and recent projects)
 

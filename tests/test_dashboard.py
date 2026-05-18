@@ -210,6 +210,53 @@ def test_scoped_chat_stream_persists_without_default_leak(tmp_path, monkeypatch)
     assert mem.get_message_count() == 0
 
 
+def test_scoped_chat_stream_suppresses_schedule_updates(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    monkeypatch.setenv("PURCIVAL_GOALS_DB", str(db_path))
+    monkeypatch.setattr(memory, "DATA_DIR", tmp_path / "persona_data")
+    monkeypatch.setattr(routes.personas, "load_persona", lambda name: "You are Jo.")
+    monkeypatch.setattr(routes, "check_and_summarize", lambda *args, **kwargs: 0)
+
+    def fake_stream(messages, system, provider=None, max_tokens=2048, task="chat"):
+        yield "Visible before. "
+        yield "<schedule_"
+        yield "updates>"
+        yield '[{"tool": "schedule", "method": "cancel_wakeup", "parameters": {"id": 7}}]'
+        yield "</schedule_"
+        yield "updates>"
+        yield " Visible after."
+
+    monkeypatch.setattr(routes.brain, "stream", fake_stream)
+
+    step = next(
+        row for row in store.list_steps(status="suggested")
+        if row["title"] == "Go to Yoga6 in Palo Alto at 12pm"
+    )
+
+    client = TestClient(app)
+    post_response = client.post(
+        f"/chat/step/{step['id']}/messages",
+        data={"message": "Please adjust the plan."},
+    )
+    assert post_response.status_code == 200
+
+    stream_response = client.get(f"/chat/streams/{post_response.json()['stream_id']}")
+
+    assert stream_response.status_code == 200
+    assert "Visible before." in stream_response.text
+    assert "Visible after." in stream_response.text
+    assert "schedule_updates" not in stream_response.text
+    assert "cancel_wakeup" not in stream_response.text
+    assert "event: done" in stream_response.text
+
+    mem = PersonaMemory("jo")
+    scope = MessageScope.step(step["id"])
+    assistant_message = mem.get_recent_messages(scope=scope)[1]
+    assert assistant_message["content"] == "Visible before.  Visible after."
+
+
 def test_step_accept_and_reject_routes(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)

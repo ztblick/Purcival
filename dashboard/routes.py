@@ -8,7 +8,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Iterator
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -28,6 +28,8 @@ from summarizer import check_and_summarize
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 DASHBOARD_PERSONA = "jo"
 CHAT_MESSAGE_PAGE_SIZE = 20
+SCHEDULE_UPDATES_START = "<schedule_updates>"
+SCHEDULE_UPDATES_END = "</schedule_updates>"
 
 router = APIRouter()
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
@@ -281,6 +283,71 @@ def format_sse(event: str, payload: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
 
 
+def _matching_marker_suffix_length(text: str, marker: str) -> int:
+    max_length = min(len(text), len(marker) - 1)
+    for length in range(max_length, 0, -1):
+        if marker.startswith(text[-length:]):
+            return length
+    return 0
+
+
+def _split_visible_prefix(buffer: str) -> tuple[str, str]:
+    keep_length = _matching_marker_suffix_length(buffer, SCHEDULE_UPDATES_START)
+    if keep_length == 0:
+        return buffer, ""
+    return buffer[:-keep_length], buffer[-keep_length:]
+
+
+def _discard_until_possible_end(buffer: str) -> str:
+    keep_length = _matching_marker_suffix_length(buffer, SCHEDULE_UPDATES_END)
+    if keep_length == 0:
+        return ""
+    return buffer[-keep_length:]
+
+
+def iter_user_visible_chunks(chunks: Iterable[str]) -> Iterator[str]:
+    """
+    Stream assistant text while suppressing hidden schedule control blocks.
+
+    The dashboard must never show machine-readable <schedule_updates> tags,
+    even when a provider splits the tag across arbitrary streaming chunks.
+    """
+    buffer = ""
+    inside_schedule_updates = False
+
+    for chunk in chunks:
+        if not chunk:
+            continue
+        buffer += chunk
+
+        while buffer:
+            if inside_schedule_updates:
+                end_index = buffer.find(SCHEDULE_UPDATES_END)
+                if end_index == -1:
+                    buffer = _discard_until_possible_end(buffer)
+                    break
+                buffer = buffer[end_index + len(SCHEDULE_UPDATES_END):]
+                inside_schedule_updates = False
+                continue
+
+            start_index = buffer.find(SCHEDULE_UPDATES_START)
+            if start_index != -1:
+                visible = buffer[:start_index]
+                if visible:
+                    yield visible
+                buffer = buffer[start_index + len(SCHEDULE_UPDATES_START):]
+                inside_schedule_updates = True
+                continue
+
+            visible, buffer = _split_visible_prefix(buffer)
+            if visible:
+                yield visible
+            break
+
+    if buffer and not inside_schedule_updates:
+        yield buffer
+
+
 def stream_chat_response(stream_id: str):
     job = _STREAM_JOBS.pop(stream_id, None)
     if job is None:
@@ -312,9 +379,7 @@ def stream_chat_response(stream_id: str):
             )
         )
         chunks = []
-        for chunk in response_source:
-            if not chunk:
-                continue
+        for chunk in iter_user_visible_chunks(response_source):
             chunks.append(chunk)
             yield format_sse("delta", {"text": chunk})
 

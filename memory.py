@@ -38,6 +38,7 @@ Design notes:
 """
 
 import json
+import logging
 import sqlite3
 import numpy as np
 from dataclasses import dataclass
@@ -46,6 +47,13 @@ from datetime import datetime, timedelta
 
 # All persona data lives under this directory
 DATA_DIR = Path(__file__).parent / "data"
+logger = logging.getLogger(__name__)
+
+
+def _truncate_log_value(value: str | None, limit: int = 240) -> str | None:
+    if value is None or len(value) <= limit:
+        return value
+    return value[:limit] + "..."
 
 
 @dataclass(frozen=True)
@@ -888,6 +896,15 @@ class PersonaMemory:
                  max_actions_per_day, now),
             )
             conn.commit()
+            logger.info(
+                "schedule_config_updated persona=%s start=%s end=%s "
+                "interval_minutes=%s max_actions_per_day=%s",
+                self.persona_name,
+                start_time,
+                end_time,
+                interval_minutes,
+                max_actions_per_day,
+            )
         finally:
             conn.close()
 
@@ -902,6 +919,14 @@ class PersonaMemory:
         """
         conn = self._connect()
         try:
+            rows = conn.execute(
+                """
+                SELECT id, type, fire_at, context, recurring
+                FROM triggers
+                WHERE fired = FALSE
+                  AND recurring IS NOT NULL
+                """
+            ).fetchall()
             conn.execute(
                 """
                 DELETE FROM triggers
@@ -910,6 +935,12 @@ class PersonaMemory:
                 """
             )
             conn.commit()
+            if rows:
+                logger.info(
+                    "recurring_triggers_cleared persona=%s trigger_ids=%s",
+                    self.persona_name,
+                    [row["id"] for row in rows],
+                )
         finally:
             conn.close()
 
@@ -926,6 +957,14 @@ class PersonaMemory:
         """
         conn = self._connect()
         try:
+            rows = conn.execute(
+                """
+                SELECT id, type, fire_at, context, recurring
+                FROM triggers
+                WHERE fired = FALSE
+                  AND (recurring IS NOT NULL OR type = 'agent_cycle')
+                """
+            ).fetchall()
             conn.execute(
                 """
                 DELETE FROM triggers
@@ -934,6 +973,12 @@ class PersonaMemory:
                 """
             )
             conn.commit()
+            if rows:
+                logger.info(
+                    "agent_triggers_cleared persona=%s trigger_ids=%s",
+                    self.persona_name,
+                    [row["id"] for row in rows],
+                )
         finally:
             conn.close()
 
@@ -957,7 +1002,7 @@ class PersonaMemory:
         try:
             rows = conn.execute(
                 """
-                SELECT id, context
+                SELECT id, fire_at, context
                 FROM triggers
                 WHERE fired = FALSE AND type = 'agent_cycle'
                 """
@@ -978,6 +1023,12 @@ class PersonaMemory:
                 conn.execute("DELETE FROM triggers WHERE id = ?", (trigger_id,))
 
             conn.commit()
+            if ids_to_delete:
+                logger.info(
+                    "planning_triggers_rescheduled persona=%s deleted_ids=%s",
+                    self.persona_name,
+                    ids_to_delete,
+                )
             return len(ids_to_delete)
         finally:
             conn.close()
@@ -1016,7 +1067,18 @@ class PersonaMemory:
                 (trigger_type, fire_at, context, recurring, now),
             )
             conn.commit()
-            return cursor.lastrowid
+            trigger_id = cursor.lastrowid
+            logger.info(
+                "trigger_added persona=%s id=%s type=%s fire_at=%s "
+                "recurring=%s context=%s",
+                self.persona_name,
+                trigger_id,
+                trigger_type,
+                fire_at,
+                recurring,
+                _truncate_log_value(context),
+            )
+            return trigger_id
         finally:
             conn.close()
 
@@ -1049,11 +1111,28 @@ class PersonaMemory:
         """
         conn = self._connect()
         try:
-            conn.execute(
+            trigger = conn.execute(
+                """
+                SELECT id, type, fire_at, context, recurring, fired
+                FROM triggers
+                WHERE id = ?
+                """,
+                (trigger_id,),
+            ).fetchone()
+            cursor = conn.execute(
                 "UPDATE triggers SET fired = TRUE WHERE id = ?",
                 (trigger_id,),
             )
             conn.commit()
+            logger.info(
+                "trigger_marked_fired persona=%s id=%s updated=%s "
+                "fire_at=%s context=%s",
+                self.persona_name,
+                trigger_id,
+                cursor.rowcount,
+                trigger["fire_at"] if trigger else None,
+                _truncate_log_value(trigger["context"] if trigger else None),
+            )
         finally:
             conn.close()
 
@@ -1070,11 +1149,29 @@ class PersonaMemory:
         """
         conn = self._connect()
         try:
-            conn.execute(
+            trigger = conn.execute(
+                """
+                SELECT id, type, fire_at, context, recurring, fired
+                FROM triggers
+                WHERE id = ?
+                """,
+                (trigger_id,),
+            ).fetchone()
+            cursor = conn.execute(
                 "UPDATE triggers SET fire_at = ? WHERE id = ?",
                 (next_fire_at, trigger_id),
             )
             conn.commit()
+            logger.info(
+                "recurring_trigger_advanced persona=%s id=%s updated=%s "
+                "old_fire_at=%s new_fire_at=%s context=%s",
+                self.persona_name,
+                trigger_id,
+                cursor.rowcount,
+                trigger["fire_at"] if trigger else None,
+                next_fire_at,
+                _truncate_log_value(trigger["context"] if trigger else None),
+            )
         finally:
             conn.close()
 
@@ -1158,7 +1255,15 @@ class PersonaMemory:
         """
         conn = self._connect()
         try:
-            conn.execute(
+            trigger = conn.execute(
+                """
+                SELECT id, type, fire_at, context, recurring, fired
+                FROM triggers
+                WHERE id = ?
+                """,
+                (trigger_id,),
+            ).fetchone()
+            cursor = conn.execute(
                 """
                 UPDATE triggers
                 SET fire_at = ?, context = ?
@@ -1167,6 +1272,17 @@ class PersonaMemory:
                 (fire_at, context, trigger_id),
             )
             conn.commit()
+            logger.info(
+                "trigger_updated persona=%s id=%s updated=%s "
+                "old_fire_at=%s new_fire_at=%s old_context=%s new_context=%s",
+                self.persona_name,
+                trigger_id,
+                cursor.rowcount,
+                trigger["fire_at"] if trigger else None,
+                fire_at,
+                _truncate_log_value(trigger["context"] if trigger else None),
+                _truncate_log_value(context),
+            )
         finally:
             conn.close()
 
@@ -1174,8 +1290,28 @@ class PersonaMemory:
         """Remove a trigger entirely."""
         conn = self._connect()
         try:
-            conn.execute("DELETE FROM triggers WHERE id = ?", (trigger_id,))
+            trigger = conn.execute(
+                """
+                SELECT id, type, fire_at, context, recurring, fired
+                FROM triggers
+                WHERE id = ?
+                """,
+                (trigger_id,),
+            ).fetchone()
+            cursor = conn.execute("DELETE FROM triggers WHERE id = ?", (trigger_id,))
             conn.commit()
+            logger.info(
+                "trigger_deleted persona=%s id=%s deleted=%s type=%s "
+                "fire_at=%s recurring=%s fired=%s context=%s",
+                self.persona_name,
+                trigger_id,
+                cursor.rowcount,
+                trigger["type"] if trigger else None,
+                trigger["fire_at"] if trigger else None,
+                trigger["recurring"] if trigger else None,
+                trigger["fired"] if trigger else None,
+                _truncate_log_value(trigger["context"] if trigger else None),
+            )
         finally:
             conn.close()
 
