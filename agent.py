@@ -38,6 +38,7 @@ import config
 from accountability import refresh_accountability_opportunities
 from memory import PersonaMemory, trigger_context_job_type
 from context import assemble_context, DEVICE_TELEGRAM
+from reflection import run_reflection_job
 from tools.base import Tool, ToolMethod
 from tools.telegram_tool import TelegramTool
 
@@ -127,11 +128,18 @@ def _build_agent_prompt(
     schedule_config: dict | None,
     actions_today: int,
     is_planning: bool = False,
+    memory: PersonaMemory | None = None,
 ) -> str:
     """
     Assemble the full system prompt for the agent reasoning call.
     """
-    from context import _load_user_context, _truncate_to_budget, BUDGET_USER_CONTEXT
+    from context import (
+        BUDGET_STRUCTURED_MEMORY,
+        BUDGET_USER_CONTEXT,
+        _load_structured_memory,
+        _load_user_context,
+        _truncate_to_budget,
+    )
 
     sections = []
 
@@ -157,6 +165,18 @@ def _build_agent_prompt(
             "## YOUR CURRENT STATE\n\n"
             "This is your first cycle. You have no previous state."
         )
+
+    structured_memory = (
+        _load_structured_memory(memory, trigger_purpose)
+        if memory is not None
+        else ""
+    )
+    if structured_memory:
+        structured_memory = _truncate_to_budget(
+            structured_memory,
+            BUDGET_STRUCTURED_MEMORY,
+        )
+        sections.append(f"## STRUCTURED MEMORY\n\n{structured_memory}")
 
     # 5. Why the agent is awake
     wake_section = trigger_purpose
@@ -443,6 +463,54 @@ async def run_agent_cycle(
     if schedule_config:
         max_actions = schedule_config.get("max_actions_per_day", 25)
 
+    if job_type == "reflection":
+        goal_store = getattr(tools.get("goals"), "store", None)
+        try:
+            reflection_receipt = run_reflection_job(
+                memory=memory,
+                store=goal_store,
+            )
+        except Exception as e:
+            logger.error(f"Cycle {cycle_id}: reflection failed: {e}")
+            memory.add_reasoning_log(
+                cycle_id=cycle_id,
+                trigger_id=trigger_id,
+                trigger_purpose=trigger_purpose,
+                narrative_in=narrative_state,
+                skipped=True,
+                skip_reason=f"Reflection failed: {e}",
+                provider=config.DEFAULT_PROVIDER,
+            )
+            memory.fail_agent_job(agent_job["id"], f"Reflection failed: {e}")
+            _ensure_future_plan(memory, tools, schedule_config)
+            return False
+
+        memory.add_reasoning_log(
+            cycle_id=cycle_id,
+            trigger_id=trigger_id,
+            trigger_purpose=trigger_purpose,
+            narrative_in=narrative_state,
+            skipped=True,
+            skip_reason=reflection_receipt["summary"],
+            provider=config.DEFAULT_PROVIDER,
+        )
+        memory.complete_agent_job(
+            agent_job["id"],
+            receipt={
+                "cycle_id": cycle_id,
+                "trigger_id": trigger_id,
+                "job_type": job_type,
+                "reflection": reflection_receipt,
+            },
+        )
+        _ensure_future_plan(memory, tools, schedule_config)
+        logger.info(
+            "Cycle %s: reflection complete (%s)",
+            cycle_id,
+            reflection_receipt["summary"],
+        )
+        return True
+
     if is_planning and "opportunities" in tools:
         opportunity_tool = tools["opportunities"]
         if hasattr(opportunity_tool, "store"):
@@ -498,6 +566,7 @@ async def run_agent_cycle(
 
     system_prompt = _build_agent_prompt(
         persona_prompt=persona_prompt,
+        memory=memory,
         narrative_state=narrative_state,
         trigger_purpose=trigger_purpose,
         trigger_time=trigger_time,

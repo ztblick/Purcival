@@ -86,6 +86,47 @@ AGENT_INBOX_SURFACES = {
     "silent",
 }
 
+MEMORY_ITEM_KINDS = {
+    "fact",
+    "preference",
+    "commitment",
+    "project",
+    "constraint",
+    "question",
+}
+
+MEMORY_ITEM_STATUSES = {
+    "active",
+    "superseded",
+    "rejected",
+    "expired",
+}
+
+REFLECTION_TRIGGER_DELAY_MINUTES = 5
+
+REFLECTION_EVENT_TYPES = {
+    "conversation_message",
+    "step_accepted",
+    "step_rejected",
+    "step_completed",
+    "step_abandoned",
+    "inbox_item_dismissed",
+    "inbox_item_snoozed",
+    "inbox_item_acted",
+}
+
+SENSITIVE_MEMORY_TERMS = {
+    "addiction",
+    "diagnosis",
+    "medical",
+    "medication",
+    "politics",
+    "political",
+    "religion",
+    "religious",
+    "sexuality",
+}
+
 
 def _truncate_log_value(value: str | None, limit: int = 240) -> str | None:
     if value is None or len(value) <= limit:
@@ -406,6 +447,29 @@ class PersonaMemory:
                     ))
                 );
 
+                CREATE TABLE IF NOT EXISTS memory_items (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind                TEXT NOT NULL,
+                    subject             TEXT NOT NULL,
+                    content             TEXT NOT NULL,
+                    confidence          INTEGER NOT NULL,
+                    evidence_event_ids  TEXT NOT NULL DEFAULT '[]',
+                    status              TEXT NOT NULL DEFAULT 'active',
+                    source              TEXT NOT NULL DEFAULT 'reflection',
+                    expires_at          TIMESTAMP,
+                    created_at          TIMESTAMP NOT NULL,
+                    updated_at          TIMESTAMP NOT NULL,
+
+                    CHECK (kind IN (
+                        'fact', 'preference', 'commitment', 'project',
+                        'constraint', 'question'
+                    )),
+                    CHECK (status IN (
+                        'active', 'superseded', 'rejected', 'expired'
+                    )),
+                    CHECK (confidence BETWEEN 1 AND 5)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_messages_created
                     ON messages(created_at);
 
@@ -453,6 +517,16 @@ class PersonaMemory:
 
                 CREATE INDEX IF NOT EXISTS idx_agent_inbox_items_duplicate
                     ON agent_inbox_items(duplicate_key, status);
+
+                CREATE INDEX IF NOT EXISTS idx_memory_items_status_kind
+                    ON memory_items(status, kind, updated_at);
+
+                CREATE INDEX IF NOT EXISTS idx_memory_items_subject
+                    ON memory_items(subject, status, updated_at);
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_items_active_subject
+                    ON memory_items(kind, subject)
+                    WHERE status = 'active';
             """)
             conn.commit()
         finally:
@@ -594,9 +668,10 @@ class PersonaMemory:
             raise ValueError(f"Invalid role '{role}'. Must be 'user' or 'assistant'.")
 
         resolved_scope = self._normalize_scope(scope)
+        message_id = None
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         conn = self._connect()
         try:
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor = conn.execute(
                 """
                 INSERT INTO messages
@@ -612,9 +687,26 @@ class PersonaMemory:
                 ),
             )
             conn.commit()
-            return cursor.lastrowid
+            message_id = cursor.lastrowid
         finally:
             conn.close()
+
+        assert message_id is not None
+        self.add_agent_event(
+            event_type="conversation_message",
+            source="conversation",
+            source_id=str(message_id),
+            payload={
+                "message_id": message_id,
+                "role": role,
+                "content": content,
+                "scope_type": resolved_scope.scope_type,
+                "scope_id": resolved_scope.scope_id,
+            },
+            occurred_at=now,
+            schedule_reflection=(role == "user"),
+        )
+        return message_id
 
     def get_recent_messages(
         self,
@@ -1410,6 +1502,40 @@ class PersonaMemory:
 
         return False
 
+    def has_future_job_type(self, job_type: str) -> bool:
+        """Return whether any active future trigger already carries this job type."""
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for trigger in self.get_active_triggers():
+            if trigger["fire_at"] <= now_str:
+                continue
+            if trigger_context_job_type(trigger.get("context")) == job_type:
+                return True
+        return False
+
+    def ensure_reflection_trigger(
+        self,
+        delay_minutes: int = REFLECTION_TRIGGER_DELAY_MINUTES,
+    ) -> int | None:
+        """
+        Ensure a future reflection trigger exists for recent feedback processing.
+
+        Reflection is silent background work, so it is scheduled outside the
+        user's normal planning cadence whenever new reflectable evidence arrives.
+        """
+        if self.has_future_job_type("reflection"):
+            return None
+        fire_at = (
+            datetime.now() + timedelta(minutes=max(1, int(delay_minutes)))
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        context = json.dumps(
+            {
+                "purpose": "Reflection cycle - process recent events into memory",
+                "job_type": "reflection",
+                "tools": [],
+            }
+        )
+        return self.add_trigger("agent_cycle", fire_at, context=context, recurring=None)
+
     def get_trigger(self, trigger_id: int) -> dict | None:
         """Get a single trigger by ID, or None if not found."""
         conn = self._connect()
@@ -1551,6 +1677,7 @@ class PersonaMemory:
         occurred_at: str | None = None,
         trust_level: str = "local",
         processed_at: str | None = None,
+        schedule_reflection: bool | None = None,
     ) -> int:
         """
         Append one durable event to the agent event log.
@@ -1582,9 +1709,15 @@ class PersonaMemory:
                 ),
             )
             conn.commit()
-            return cursor.lastrowid
+            event_id = cursor.lastrowid
         finally:
             conn.close()
+
+        if schedule_reflection is None:
+            schedule_reflection = event_type in REFLECTION_EVENT_TYPES
+        if schedule_reflection:
+            self.ensure_reflection_trigger()
+        return event_id
 
     def get_agent_events(
         self,
@@ -1618,6 +1751,64 @@ class PersonaMemory:
                 params,
             ).fetchall()
             return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def get_unprocessed_agent_events(
+        self,
+        event_types: set[str] | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Return unprocessed agent events, oldest first."""
+        clauses = ["processed_at IS NULL"]
+        params: list = []
+        if event_types:
+            placeholders = ", ".join("?" for _ in sorted(event_types))
+            clauses.append(f"event_type IN ({placeholders})")
+            params.extend(sorted(event_types))
+        where = "WHERE " + " AND ".join(clauses)
+        params.append(limit)
+
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT id, event_type, source, source_id, persona, payload_json,
+                       occurred_at, recorded_at, trust_level, processed_at
+                FROM agent_events
+                {where}
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def mark_agent_events_processed(
+        self,
+        event_ids: list[int],
+        processed_at: str | None = None,
+    ) -> int:
+        """Mark a batch of agent events processed."""
+        cleaned = [int(event_id) for event_id in event_ids if int(event_id) > 0]
+        if not cleaned:
+            return 0
+        timestamp = processed_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        placeholders = ", ".join("?" for _ in cleaned)
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                f"""
+                UPDATE agent_events
+                SET processed_at = ?
+                WHERE id IN ({placeholders})
+                """,
+                [timestamp, *cleaned],
+            )
+            conn.commit()
+            return cursor.rowcount
         finally:
             conn.close()
 
@@ -2341,6 +2532,418 @@ class PersonaMemory:
             return f"inbox:opportunity={opportunity_id}"
         normalized_title = " ".join(title.casefold().split())
         return f"inbox:title={normalized_title}"
+
+    # --- Structured Memory ---
+
+    def record_memory_item(
+        self,
+        kind: str,
+        subject: str,
+        content: str,
+        confidence: int,
+        evidence_event_ids: list[int],
+        status: str = "active",
+        expires_at: str | None = None,
+        source: str = "reflection",
+        supersede_existing: bool = False,
+    ) -> int:
+        """
+        Create or refresh a typed memory record.
+
+        Active items are unique by (kind, subject). Matching active rows merge
+        evidence when their content matches. Callers may opt in to superseding
+        an existing active row before recording a replacement.
+        """
+        self.expire_memory_items()
+        validated = self._validate_memory_item_fields(
+            kind=kind,
+            subject=subject,
+            content=content,
+            confidence=confidence,
+            evidence_event_ids=evidence_event_ids,
+            status=status,
+        )
+        existing = None
+        if validated["status"] == "active":
+            existing = self.get_active_memory_item(
+                validated["kind"],
+                validated["subject"],
+            )
+        if existing is not None:
+            existing_evidence = self._decode_json_list(existing["evidence_event_ids"])
+            merged_evidence = sorted(
+                {int(event_id) for event_id in existing_evidence + validated["evidence_event_ids"]}
+            )
+            if existing["content"] == validated["content"]:
+                merged_confidence = max(int(existing["confidence"]), validated["confidence"])
+                self.update_memory_item(
+                    int(existing["id"]),
+                    content=validated["content"],
+                    confidence=merged_confidence,
+                    evidence_event_ids=merged_evidence,
+                    expires_at=expires_at,
+                )
+                return int(existing["id"])
+            if not supersede_existing:
+                raise ValueError(
+                    f"Active memory item already exists for {validated['kind']} / "
+                    f"{validated['subject']}"
+                )
+            self.update_memory_item_status(
+                int(existing["id"]),
+                "superseded",
+                evidence_event_ids=validated["evidence_event_ids"],
+            )
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO memory_items
+                    (kind, subject, content, confidence, evidence_event_ids,
+                     status, source, expires_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    validated["kind"],
+                    validated["subject"],
+                    validated["content"],
+                    validated["confidence"],
+                    json.dumps(validated["evidence_event_ids"], ensure_ascii=True),
+                    validated["status"],
+                    source,
+                    expires_at,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            item_id = cursor.lastrowid
+        finally:
+            conn.close()
+
+        self.add_agent_event(
+            event_type="memory_item_recorded",
+            source=source,
+            source_id=str(item_id),
+            payload={
+                "memory_item_id": item_id,
+                "kind": validated["kind"],
+                "subject": validated["subject"],
+                "status": validated["status"],
+                "confidence": validated["confidence"],
+                "evidence_event_ids": validated["evidence_event_ids"],
+            },
+            schedule_reflection=False,
+        )
+        return item_id
+
+    def get_memory_item(self, item_id: int) -> dict | None:
+        """Return one memory item by id."""
+        self.expire_memory_items()
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM memory_items
+                WHERE id = ?
+                """,
+                (int(item_id),),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_active_memory_item(self, kind: str, subject: str) -> dict | None:
+        """Return the active memory item for this kind/subject pair, if present."""
+        self.expire_memory_items()
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM memory_items
+                WHERE kind = ?
+                  AND subject = ?
+                  AND status = 'active'
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (kind, subject),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def list_memory_items(
+        self,
+        status: str | None = "active",
+        kind: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Return recent memory items, newest first."""
+        self.expire_memory_items()
+        clauses = []
+        params: list = []
+        if status is not None:
+            self._validate_memory_status(status)
+            clauses.append("status = ?")
+            params.append(status)
+        if kind is not None:
+            self._validate_memory_kind(kind)
+            clauses.append("kind = ?")
+            params.append(kind)
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(limit)
+
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM memory_items
+                {where}
+                ORDER BY updated_at DESC, id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def update_memory_item(
+        self,
+        item_id: int,
+        content: str | None = None,
+        confidence: int | None = None,
+        evidence_event_ids: list[int] | None = None,
+        expires_at: str | None = None,
+    ) -> bool:
+        """Update mutable fields on one memory item."""
+        existing = self.get_memory_item(item_id)
+        if existing is None:
+            return False
+
+        updates = []
+        params = []
+        if content is not None:
+            cleaned = content.strip()
+            if not cleaned:
+                raise ValueError("content cannot be empty")
+            updates.append("content = ?")
+            params.append(cleaned)
+        if confidence is not None:
+            updates.append("confidence = ?")
+            params.append(self._validate_memory_confidence(confidence))
+        if evidence_event_ids is not None:
+            updates.append("evidence_event_ids = ?")
+            params.append(
+                json.dumps(
+                    self._validate_evidence_event_ids(evidence_event_ids),
+                    ensure_ascii=True,
+                )
+            )
+        if expires_at is not None:
+            updates.append("expires_at = ?")
+            params.append(expires_at)
+        if not updates:
+            return True
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        updates.append("updated_at = ?")
+        params.append(now)
+        params.append(int(item_id))
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                f"""
+                UPDATE memory_items
+                SET {", ".join(updates)}
+                WHERE id = ?
+                """,
+                params,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        if cursor.rowcount:
+            self.add_agent_event(
+                event_type="memory_item_updated",
+                source=existing.get("source") or "memory",
+                source_id=str(item_id),
+                payload={"memory_item_id": int(item_id)},
+                schedule_reflection=False,
+            )
+        return cursor.rowcount > 0
+
+    def update_memory_item_status(
+        self,
+        item_id: int,
+        status: str,
+        evidence_event_ids: list[int] | None = None,
+    ) -> bool:
+        """Move a memory item through its bounded lifecycle."""
+        existing = self.get_memory_item(item_id)
+        if existing is None:
+            return False
+        self._validate_memory_transition(existing["status"], status)
+
+        merged_evidence = self._decode_json_list(existing["evidence_event_ids"])
+        if evidence_event_ids:
+            merged_evidence = sorted(
+                {int(event_id) for event_id in merged_evidence + evidence_event_ids}
+            )
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                UPDATE memory_items
+                SET status = ?,
+                    evidence_event_ids = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    json.dumps(merged_evidence, ensure_ascii=True),
+                    now,
+                    int(item_id),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        if cursor.rowcount:
+            self.add_agent_event(
+                event_type="memory_item_status_changed",
+                source=existing.get("source") or "memory",
+                source_id=str(item_id),
+                payload={
+                    "memory_item_id": int(item_id),
+                    "previous_status": existing["status"],
+                    "status": status,
+                },
+                schedule_reflection=False,
+            )
+        return cursor.rowcount > 0
+
+    def expire_memory_items(self) -> int:
+        """Mark active items expired once their expiry timestamp passes."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                UPDATE memory_items
+                SET status = 'expired',
+                    updated_at = ?
+                WHERE status = 'active'
+                  AND expires_at IS NOT NULL
+                  AND expires_at <= ?
+                """,
+                (now, now),
+            )
+            conn.commit()
+            return cursor.rowcount
+        finally:
+            conn.close()
+
+    def _validate_memory_item_fields(
+        self,
+        kind: str,
+        subject: str,
+        content: str,
+        confidence: int,
+        evidence_event_ids: list[int],
+        status: str,
+    ) -> dict[str, object]:
+        self._validate_memory_kind(kind)
+        self._validate_memory_status(status)
+        cleaned_subject = subject.strip()
+        cleaned_content = content.strip()
+        if not cleaned_subject:
+            raise ValueError("subject cannot be empty")
+        if not cleaned_content:
+            raise ValueError("content cannot be empty")
+        normalized_confidence = self._validate_memory_confidence(confidence)
+        normalized_evidence = self._validate_evidence_event_ids(evidence_event_ids)
+        if not normalized_evidence:
+            raise ValueError("memory items require at least one evidence_event_id")
+        lowered = f"{cleaned_subject} {cleaned_content}".casefold()
+        if normalized_confidence > 3 and any(term in lowered for term in SENSITIVE_MEMORY_TERMS):
+            raise ValueError(
+                "Sensitive inferred memories must stay low or medium confidence"
+            )
+        return {
+            "kind": kind,
+            "subject": cleaned_subject,
+            "content": cleaned_content,
+            "confidence": normalized_confidence,
+            "evidence_event_ids": normalized_evidence,
+            "status": status,
+        }
+
+    def _validate_memory_kind(self, kind: str):
+        if kind not in MEMORY_ITEM_KINDS:
+            choices = ", ".join(sorted(MEMORY_ITEM_KINDS))
+            raise ValueError(
+                f"Invalid memory kind '{kind}'. Expected one of: {choices}"
+            )
+
+    def _validate_memory_status(self, status: str):
+        if status not in MEMORY_ITEM_STATUSES:
+            choices = ", ".join(sorted(MEMORY_ITEM_STATUSES))
+            raise ValueError(
+                f"Invalid memory status '{status}'. Expected one of: {choices}"
+            )
+
+    def _validate_memory_confidence(self, value: int) -> int:
+        confidence = int(value)
+        if confidence < 1 or confidence > 5:
+            raise ValueError("confidence must be between 1 and 5")
+        return confidence
+
+    def _validate_evidence_event_ids(self, evidence_event_ids: list[int]) -> list[int]:
+        cleaned = sorted({int(event_id) for event_id in evidence_event_ids if int(event_id) > 0})
+        return cleaned
+
+    def _validate_memory_transition(self, current_status: str, new_status: str):
+        self._validate_memory_status(new_status)
+        allowed = {
+            "active": {"active", "superseded", "rejected", "expired"},
+            "superseded": {"superseded"},
+            "rejected": {"rejected", "superseded"},
+            "expired": {"expired", "superseded"},
+        }
+        if new_status not in allowed.get(current_status, set()):
+            raise ValueError(
+                f"Invalid memory status transition {current_status!r} -> {new_status!r}"
+            )
+
+    def _decode_json_list(self, raw: str | None) -> list[int]:
+        if not raw:
+            return []
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(decoded, list):
+            return []
+        cleaned = []
+        for value in decoded:
+            try:
+                numeric = int(value)
+            except (TypeError, ValueError):
+                continue
+            if numeric > 0:
+                cleaned.append(numeric)
+        return cleaned
 
     # --- Agent Actions ---
 

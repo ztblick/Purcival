@@ -17,9 +17,10 @@ The messages array contains recent verbatim messages (< 8,000 tokens).
 
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from memory import MessageScope, PersonaMemory
+from memory import MessageScope, PersonaMemory, trigger_context_job_type
 from tokens import get_token_count
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ BUDGET_PERSONA = 2_000
 BUDGET_USER_CONTEXT = 2_000
 BUDGET_SCHEDULED_PLAN = 2_000
 BUDGET_ACTIVE_DASHBOARD_CONTEXT = 2_000
+BUDGET_STRUCTURED_MEMORY = 2_000
 BUDGET_SUMMARIES = 8_000
 BUDGET_ADDITIONAL = 8_000
 BUDGET_MESSAGES = 8_000
@@ -84,6 +86,11 @@ def _load_scheduled_plan(memory: PersonaMemory) -> str:
     now_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
     future = [t for t in active if t["fire_at"] > now_str]
+    future = [
+        trigger
+        for trigger in future
+        if trigger_context_job_type(trigger.get("context")) != "reflection"
+    ]
     if not future:
         return ""
 
@@ -128,6 +135,44 @@ def _load_scheduled_plan(memory: PersonaMemory) -> str:
     )
 
     return "\n".join(lines)
+
+
+def _load_structured_memory(
+    memory: PersonaMemory,
+    current_message: str,
+) -> str:
+    items = memory.list_memory_items(status="active", limit=40)
+    if not items:
+        return ""
+
+    query_terms = _keyword_terms(current_message)
+    now = datetime.now()
+    scored: list[tuple[int, dict, int]] = []
+    for item in items:
+        item_text = f"{item['subject']} {item['content']}"
+        overlap = len(query_terms & _keyword_terms(item_text))
+        age_days = _memory_age_days(item.get("updated_at"), now)
+        score = int(item.get("confidence") or 1) * 10
+        score += overlap * 15
+        score += max(0, 7 - age_days)
+        scored.append((score, item, overlap))
+
+    scored.sort(
+        key=lambda entry: (entry[0], entry[1]["updated_at"], entry[1]["id"]),
+        reverse=True,
+    )
+    parts = []
+    for _, item, overlap in scored[:8]:
+        evidence_count = len(_decode_json_list(item.get("evidence_event_ids")))
+        relevance_note = " [relevant]" if overlap else ""
+        parts.append(
+            f"[{item.get('updated_at', 'unknown')}]{relevance_note} "
+            f"{str(item['kind']).upper()} c{item['confidence']}/5\n"
+            f"Subject: {item['subject']}\n"
+            f"{item['content']}\n"
+            f"Evidence events: {evidence_count}"
+        )
+    return "\n\n---\n\n".join(parts)
 
 
 def _load_summaries(
@@ -331,6 +376,46 @@ def _truncate_to_budget(text: str, budget: int) -> str:
     return truncated + "\n\n[... content truncated to fit token budget ...]"
 
 
+def _keyword_terms(text: str) -> set[str]:
+    if not text:
+        return set()
+    return {
+        token.casefold()
+        for token in re.findall(r"[A-Za-z0-9']+", text)
+        if len(token) >= 4
+    }
+
+
+def _memory_age_days(timestamp: str | None, now: datetime) -> int:
+    if not timestamp:
+        return 30
+    try:
+        parsed = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return 30
+    return max(0, (now - parsed).days)
+
+
+def _decode_json_list(raw: str | None) -> list[int]:
+    if not raw:
+        return []
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(decoded, list):
+        return []
+    cleaned = []
+    for value in decoded:
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            continue
+        if numeric > 0:
+            cleaned.append(numeric)
+    return cleaned
+
+
 def _build_system_prompt(
     persona_prompt,
     memory,
@@ -347,6 +432,11 @@ def _build_system_prompt(
             "ACTIVE DASHBOARD CONTEXT",
             entity_context or "",
             BUDGET_ACTIVE_DASHBOARD_CONTEXT,
+        ),
+        (
+            "STRUCTURED MEMORY",
+            _load_structured_memory(memory, current_message),
+            BUDGET_STRUCTURED_MEMORY,
         ),
         ("YOUR SCHEDULED PLAN", _load_scheduled_plan(memory), BUDGET_SCHEDULED_PLAN),
         (

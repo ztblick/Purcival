@@ -1,6 +1,6 @@
 # Core Agent Reliability Redesign
 
-**Status:** Phase E mobile access verified; Phase F implementation is next
+**Status:** Phase F first slice implemented; correction surfacing remains open
 **Date:** 2026-05-18
 **Scope:** reasoning, scheduling, action selection, learning, security, and proactive delivery
 
@@ -1100,18 +1100,18 @@ named around delivery milestones, not around every feature in section 5. The
 result is mixed: Phases A-E successfully built the early substrate, but they did
 not complete the full proposed architecture.
 
-| Feature | Status after Phase E | Notes |
+| Feature | Status after Phase F first slice | Notes |
 | --- | --- | --- |
-| 5.1 Event Log | Partial, usable substrate | `agent_events` exists in each persona DB and now records tool observations, job outcomes, opportunities, inbox events, and step receipts. It is not yet the canonical event stream for every conversation, memory update, security event, or external observation. |
-| 5.2 Structured Working Memory | Not implemented | Purcival still relies on narrative state, summaries, scoped messages, goals, and steps. There is no `memory_items` table, typed belief model, provenance validator, confidence lifecycle, or reflection processor. |
+| 5.1 Event Log | Partial, broader substrate | `agent_events` exists in each persona DB and now records tool observations, job outcomes, opportunities, inbox events, step receipts, conversation messages, and memory-item receipts. It is not yet the canonical event stream for every security event or future external observation, but it now covers the first reflection inputs. |
+| 5.2 Structured Working Memory | Partial, first slice implemented | `memory_items` now exists in each persona DB with typed kind/subject/content/confidence/evidence/status fields, validators, expiry, and status transitions. Prompt context can load recent structured memory. Broader user modeling and dashboard correction UX remain later work. |
 | 5.3 Opportunity Queue | Partial, useful for dashboard goals | `agent_opportunities` exists and supports goal-step suggestions plus accountability checks, duplicate suppression, and dashboard delivery. It does not yet cover calendar/email/research/file/reminder opportunities or a general policy lifecycle. |
-| 5.4 Explicit Job Types | Partial, useful migration layer | `agent_jobs` and trigger `job_type` metadata exist with leasing, retries, and completion receipts. The scheduler still uses triggers as the low-level clock and only a small subset of job types is actively exercised. |
+| 5.4 Explicit Job Types | Partial, useful migration layer | `agent_jobs` and trigger `job_type` metadata exist with leasing, retries, and completion receipts. Planning, targeted, and reflection jobs are now actively exercised. The scheduler still uses triggers as the low-level clock. |
 | 5.5 Planner, Critic, Compiler | Mostly not implemented | The loop still makes one reasoning call that can emit direct tool actions. There is compatibility routing and validation, but no durable plan object, separate policy gate, or compiler that turns approved plans into tool calls. |
 | 5.6 Execution Engine | Partial at job level, weak at action level | Jobs have leases/retries/completion receipts. Individual tool actions are still mostly `agent_actions` log rows with immediate execution; they lack idempotency keys, per-action leases, retry scheduling, durable approval records, and receipt schemas. |
 | 5.7 Communication and Delivery Layer | Partial, dashboard-first | `agent_inbox_items` and dashboard cards exist for suggestions and accountability. Mobile access through Tailscale has been verified by Zach. Delivery policy, attention windows, and non-dashboard surfaces are not complete. |
 | 5.8 Tool Capability Model | Not implemented beyond tier naming | `internal_write` is used, but tools still declare only broad tiers plus parameter descriptions. There is no capability metadata for side effects, data sensitivity, untrusted output, rate limits, allowed roots, deny rules, or approval policy. |
 | 5.9 Untrusted Content Boundary | Not implemented | Web/file tools remain deferred, which is good. Before adding them, tool outputs need explicit untrusted-content wrapping and the compiler/policy layer must reject actions justified only by untrusted instructions. |
-| 5.10 Learning Loop | Not implemented | Step outcomes and inbox outcomes now create the inputs, but there is no recurring reflection job that turns events into structured memory, preference updates, suppression rules, or goal/step framing improvements. |
+| 5.10 Learning Loop | Partial, deterministic first slice | Reflection jobs now process unprocessed step/inbox/conversation events into typed commitment/fact/preference memory items, mark those events processed, and surface the resulting memory in prompt context. LLM-assisted synthesis, broader suppression logic, and goal/project reframing remain future work. |
 
 The important conclusion: Phase E succeeded at mobile-ready dashboard delivery
 and the first event/job/opportunity/inbox substrate. It did not complete the
@@ -1376,6 +1376,29 @@ Implementation handoff:
   plumbing, deterministic/idempotent event-to-memory processing, and context
   inclusion. Do not start planner/compiler, capability registry, web tools, or
   file tools in Phase F.
+
+Implementation notes:
+
+- Phase F's first slice is now in code.
+- `memory_items` lives in each persona's `memory.db` beside events, jobs,
+  opportunities, inbox items, and narrative state. The first schema includes
+  kind, subject, content, 1-5 confidence, evidence-event ids, status,
+  timestamps, and optional expiry.
+- Memory writes now validate required evidence, confidence bounds, bounded
+  status transitions, and low/medium-confidence handling for sensitive inferred
+  memories.
+- `add_message()` now records `conversation_message` events. Reflectable events
+  schedule one future `reflection` trigger automatically, and the reflection
+  job type runs through the existing job lease/receipt path without another LLM
+  call.
+- `reflection.py` processes unprocessed step outcomes, inbox dismiss/snooze
+  feedback, repeated ignored suggestion patterns, and explicit user corrections
+  into typed memory records, then marks those source events processed.
+- `context.py` and the agent reasoning prompt now include recent structured
+  memory. Reflection triggers are filtered out of the user-visible scheduled
+  plan context so silent learning work does not clutter chat planning.
+- The dashboard-visible correction/activity path for learned memories is still
+  open and should be decided before treating Phase F as fully closed.
 
 ### Phase G - Planner, policy gate, and compiler
 
