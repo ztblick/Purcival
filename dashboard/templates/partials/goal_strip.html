@@ -1,9 +1,20 @@
 <section class="goal-strip" aria-labelledby="goals-heading">
   <div class="goal-strip__masthead">
-    <div>
+    <div class="goal-strip__title">
       <p class="eyebrow">Purcival / Jo</p>
       <h1>{{ initial_title }}</h1>
     </div>
+    <nav class="category-filter" aria-label="Goal category filters">
+      {% for item in category_filters %}
+        <a
+          class="category-bubble {{ item.category_class }}{% if item.is_active %} category-bubble--active{% endif %}"
+          href="{{ item.url }}"
+          data-dashboard-filter-url="{{ item.url }}"
+          data-category-filter="{{ item.value }}"
+          aria-current="{% if item.is_active %}true{% else %}false{% endif %}"
+        >{{ item.label }}</a>
+      {% endfor %}
+    </nav>
     {% if dashboard_authenticated %}
       <form class="session-form" action="/logout" method="post">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

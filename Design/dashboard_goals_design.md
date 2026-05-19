@@ -1,6 +1,6 @@
 # Goals Dashboard Design
 
-**Status:** Phase 5 agent suggestion generation complete; category filter UI design awaiting approval
+**Status:** Phase 5 agent suggestion generation complete; category filter UI implemented
 **Date:** 2026-05-19
 **Phase:** 5 adjunct - Dashboard category filtering
 **Scope:** shared goal state, scoped conversations, dashboard UI, and agent integration
@@ -1039,7 +1039,7 @@ controls.
 
 ### Phase 5 adjunct - Category filtering
 
-Designed, awaiting Zach approval before production implementation.
+Implemented after Zach approval.
 
 Implement:
 

@@ -95,13 +95,54 @@ async function loadChatPanel(scopeType, scopeId) {
   setupChatHistory(document);
 }
 
+function filterSearchFromUrl(url) {
+  const parsed = new URL(url, window.location.origin);
+  return parsed.search;
+}
+
+async function applyDashboardFilter(url, pushState = true) {
+  const search = filterSearchFromUrl(url);
+  const [goalsResponse, stepsResponse] = await Promise.all([
+    fetch(`/partials/goals${search}`, {
+      headers: authAwareHeaders({
+        "HX-Request": "true",
+      }),
+    }),
+    fetch(`/partials/suggestions${search}`, {
+      headers: authAwareHeaders({
+        "HX-Request": "true",
+      }),
+    }),
+  ]);
+
+  if (redirectToLoginIfNeeded(goalsResponse) || redirectToLoginIfNeeded(stepsResponse)) {
+    return;
+  }
+  if (!goalsResponse.ok || !stepsResponse.ok) {
+    return;
+  }
+
+  const goalStrip = document.querySelector(".goal-strip");
+  const stepsPanel = document.querySelector("#steps-panel");
+  if (goalStrip) {
+    goalStrip.outerHTML = await goalsResponse.text();
+  }
+  if (stepsPanel) {
+    stepsPanel.outerHTML = await stepsResponse.text();
+  }
+
+  if (pushState) {
+    window.history.pushState({}, "", `/${search}`);
+  }
+}
+
 async function refreshStepsPanel() {
   const target = document.querySelector("#steps-panel");
   if (!target) {
     return;
   }
 
-  const response = await fetch("/partials/suggestions", {
+  const response = await fetch(`/partials/suggestions${window.location.search}`, {
     headers: authAwareHeaders({
       "HX-Request": "true",
     }),
@@ -470,6 +511,16 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const filterLink = event.target.closest("a[data-dashboard-filter-url]");
+  if (filterLink) {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+    event.preventDefault();
+    applyDashboardFilter(filterLink.getAttribute("data-dashboard-filter-url"));
+    return;
+  }
+
   const explicitChatButton = event.target.closest("button[data-chat-scope-type][data-chat-scope-id]");
   if (explicitChatButton) {
     event.preventDefault();
@@ -489,6 +540,10 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const filterUrl = chatTarget.getAttribute("data-filter-url");
+  if (filterUrl) {
+    applyDashboardFilter(filterUrl);
+  }
   loadChatPanel(
     chatTarget.getAttribute("data-chat-scope-type"),
     chatTarget.getAttribute("data-chat-scope-id"),
@@ -510,10 +565,18 @@ document.addEventListener("keydown", (event) => {
   }
 
   event.preventDefault();
+  const filterUrl = chatTarget.getAttribute("data-filter-url");
+  if (filterUrl) {
+    applyDashboardFilter(filterUrl);
+  }
   loadChatPanel(
     chatTarget.getAttribute("data-chat-scope-type"),
     chatTarget.getAttribute("data-chat-scope-id"),
   );
+});
+
+window.addEventListener("popstate", () => {
+  applyDashboardFilter(window.location.href, false);
 });
 
 document.addEventListener("DOMContentLoaded", () => {

@@ -11,7 +11,7 @@ agent sessions. Read it in full each session. Update sections marked
 **Last updated:** 2026-05-19
 **Active task:** Core agent reliability redesign
 **Phase:** Phase F - structured working memory and reflection first slice implemented
-**Status:** The Goals dashboard task is closed as the primary development focus. Do not continue dashboard Phase 6 as previously scoped. Zach reopened a narrow dashboard category-filter UI adjunct on 2026-05-19; the design is now drafted in `Design/dashboard_goals_design.md` and awaits approval before production code. The active redesign plan remains `Design/core_agent_reliability_redesign.md`: migrate the agent loop toward an event log, explicit job types, an opportunity queue, planner/policy/compiler separation, durable execution state, a dashboard delivery inbox, scoped capabilities, and an untrusted-content boundary before adding web/file/computer tools. Phase A safety/instrumentation, Phase B event/jobs, Phase C opportunities, Phase D accountability receipts, and Phase E inbox/mobile access are all in place. Phase F's first narrow slice is now implemented: per-persona typed `memory_items`, validators and confidence/status lifecycle rules, `conversation_message` events, auto-scheduled `reflection` jobs, deterministic event-to-memory processing for step outcomes/inbox feedback/user corrections, and structured-memory inclusion in chat/reasoning context. The remaining open question is the future correction/activity UX for autonomous memory writes. Do not jump ahead to planner/compiler, capability registry, web tools, file tools, public hosting, or computer-control work without explicitly deciding whether any more Phase F correction surfacing is needed first.
+**Status:** The Goals dashboard task is closed as the primary development focus. Do not continue dashboard Phase 6 as previously scoped. Zach reopened and approved a narrow dashboard category-filter UI adjunct on 2026-05-19; category bubbles, category/goal filter state, filtered steps/inbox cards, and reset behavior are now implemented. The active redesign plan remains `Design/core_agent_reliability_redesign.md`: migrate the agent loop toward an event log, explicit job types, an opportunity queue, planner/policy/compiler separation, durable execution state, a dashboard delivery inbox, scoped capabilities, and an untrusted-content boundary before adding web/file/computer tools. Phase A safety/instrumentation, Phase B event/jobs, Phase C opportunities, Phase D accountability receipts, and Phase E inbox/mobile access are all in place. Phase F's first narrow slice is now implemented: per-persona typed `memory_items`, validators and confidence/status lifecycle rules, `conversation_message` events, auto-scheduled `reflection` jobs, deterministic event-to-memory processing for step outcomes/inbox feedback/user corrections, and structured-memory inclusion in chat/reasoning context. The remaining open question is the future correction/activity UX for autonomous memory writes. Do not jump ahead to planner/compiler, capability registry, web tools, file tools, public hosting, or computer-control work without explicitly deciding whether any more Phase F correction surfacing is needed first.
 
 ---
 
@@ -229,12 +229,7 @@ suggestions and confirms they feel better-tuned.
 
 ## Decisions awaiting Zach's approval                    *updatable*
 
-- Dashboard category filter UI - approve the `Design/dashboard_goals_design.md`
-  Phase 5 adjunct for category bubbles beside the motivational title,
-  query-parameter-backed `category`/`goal_id` filter state, `All` reset,
-  server-rendered goal/step/inbox filtering, vanilla-JS partial refreshes, and
-  active visual states. Rationale: this matches Zach's sketch without adding
-  category persistence, step-level categories, or a frontend state framework.
+- None currently.
 
 When you stop at a gate, append an entry with:
 - The phase / context
@@ -249,6 +244,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-19 - Dashboard category filter implementation - added top-strip category bubbles, query-backed category/goal filtering, filtered goal/step/inbox rendering, JS partial refresh/reset behavior, active visual states, dashboard/Playwright coverage, a seeded browser smoke check, and full pytest passing - uncommitted.
 - 2026-05-19 - Dashboard category filter design - drafted the category bubble/filter design in `Design/dashboard_goals_design.md`, including the `All` reset, category/goal filtering rules, inbox behavior, and test targets; no production code written pending Zach approval - committed.
 - 2026-05-19 - Dashboard chat streaming scroll fix - preserved manual upward scroll position while scoped chat responses stream, added a browser-level regression for streaming while scrolled away from the bottom, and kept full pytest passing - uncommitted.
 - 2026-05-18 - Core agent reliability Phase E.5 verification handoff - recorded Zach's successful Tailscale mobile verification, marked Phase F structured working memory/reflection as the next approved implementation target, refreshed `AGENTS.md`, `README.md`, `PROGRESS.md`, and `Design/core_agent_reliability_redesign.md` for a fresh Codex handoff - committed.

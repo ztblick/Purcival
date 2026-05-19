@@ -1,10 +1,12 @@
 <article
-  class="goal-card {{ goal.category_class }}"
+  class="goal-card {{ goal.category_class }}{% if goal.is_selected %} goal-card--selected{% endif %}"
   data-goal-id="{{ goal.id }}"
+  data-filter-url="{{ goal.filter_url }}"
   data-chat-scope-type="{{ goal.scope_type }}"
   data-chat-scope-id="{{ goal.scope_id }}"
   role="button"
   tabindex="0"
+  aria-pressed="{% if goal.is_selected %}true{% else %}false{% endif %}"
 >
   <div class="card-tag">{{ goal.category }}</div>
   <div class="goal-card__body">

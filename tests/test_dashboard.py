@@ -265,6 +265,110 @@ def test_dashboard_partials_render(tmp_path, monkeypatch):
     assert "Focused Chat" in chat_response.text
 
 
+def test_dashboard_category_filter_renders_bubbles_and_filters_steps(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    client = make_client(monkeypatch, tmp_path, db_path)
+    login(client)
+
+    response = client.get("/?category=career")
+
+    assert response.status_code == 200
+    assert 'data-category-filter=""' in response.text
+    assert 'data-category-filter="career"' in response.text
+    assert 'category-bubble--active' in response.text
+    assert "Learn more about AI safety" in response.text
+    assert "Continue learning about LucidAI and their tech" in response.text
+    assert "Stay active &amp; healthy" not in response.text
+    assert "Go to Yoga6 in Palo Alto at 12pm" not in response.text
+    assert "Be a good husband and father" not in response.text
+    assert "Put up flyers for private tutoring" not in response.text
+
+
+def test_dashboard_goal_filter_narrows_steps_and_ignores_mismatched_goal(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    client = make_client(monkeypatch, tmp_path, db_path)
+    login(client)
+
+    career_goal = next(
+        goal for goal in store.list_goals(status="active")
+        if goal["category"] == "career"
+    )
+    health_goal = next(
+        goal for goal in store.list_goals(status="active")
+        if goal["category"] == "health"
+    )
+    store.create_step(
+        goal_id=career_goal["id"],
+        title="Draft one AI safety question",
+        status="accepted",
+    )
+
+    goal_response = client.get(f"/partials/suggestions?goal_id={career_goal['id']}")
+    mismatch_response = client.get(
+        f"/partials/suggestions?category=career&goal_id={health_goal['id']}"
+    )
+
+    assert goal_response.status_code == 200
+    assert "Continue learning about LucidAI and their tech" in goal_response.text
+    assert "Draft one AI safety question" in goal_response.text
+    assert "Go to Yoga6 in Palo Alto at 12pm" not in goal_response.text
+    assert "Put up flyers for private tutoring" not in goal_response.text
+    assert f"/steps/" in goal_response.text
+    assert "goal_id=" in goal_response.text
+
+    assert mismatch_response.status_code == 200
+    assert "Continue learning about LucidAI and their tech" in mismatch_response.text
+    assert "Go to Yoga6 in Palo Alto at 12pm" not in mismatch_response.text
+
+
+def test_dashboard_category_filter_hides_nonmatching_step_inbox_cards(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    configure_dashboard_env(monkeypatch, tmp_path, db_path)
+
+    mem = PersonaMemory("jo")
+    health_goal = next(
+        goal for goal in store.list_goals(status="active")
+        if goal["category"] == "health"
+    )
+    step_id = store.create_step(
+        goal_id=health_goal["id"],
+        title="Try the health inbox filter",
+        status="suggested",
+        source="agent_planning",
+        created_by_persona="jo",
+    )
+    opportunity_id = mem.add_agent_opportunity(
+        kind="suggest_goal_step",
+        title="Try the health inbox filter",
+        rationale="This should disappear outside health.",
+        goal_id=health_goal["id"],
+        step_id=step_id,
+        status="delivered",
+        urgency=3,
+        impact=4,
+        confidence=4,
+        attention_cost=1,
+        risk_level="low",
+    )
+    deliver_opportunity_to_inbox(mem, store, mem.get_agent_opportunity(opportunity_id))
+
+    client = TestClient(create_app())
+    login(client)
+    career_response = client.get("/?category=career")
+    health_response = client.get("/?category=health")
+
+    assert career_response.status_code == 200
+    assert "Suggested step: Try the health inbox filter" not in career_response.text
+    assert health_response.status_code == 200
+    assert "Suggested step: Try the health inbox filter" in health_response.text
+
+
 def test_scoped_chat_panel_loads_step_history(tmp_path, monkeypatch):
     db_path = tmp_path / "user.db"
     store = SharedGoalStore(db_path)
@@ -797,6 +901,81 @@ def test_playwright_accept_reject_flow(tmp_path):
     assert refreshed_store.get_step(yoga_step["id"])["status"] == "accepted"
     assert refreshed_store.get_step(lucid_step["id"])["status"] == "rejected"
     assert refreshed_store.list_step_feedback(lucid_step["id"]) == []
+
+
+def test_playwright_category_filter_flow(tmp_path):
+    try:
+        from playwright.sync_api import expect, sync_playwright
+    except ImportError:
+        pytest.skip("Playwright is not installed")
+
+    db_path = tmp_path / "user.db"
+    seed_mockup_data(SharedGoalStore(db_path))
+
+    port = find_free_port()
+    url = f"http://127.0.0.1:{port}/"
+    env = dashboard_subprocess_env(tmp_path, db_path)
+    server = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "dashboard.app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    try:
+        wait_for_server(url, server)
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception:
+                try:
+                    browser = playwright.chromium.launch(channel="msedge")
+                except Exception:
+                    pytest.skip("No Playwright Chromium-compatible browser is installed")
+
+            try:
+                page = browser.new_page(viewport={"width": 1280, "height": 900})
+                page.goto(url, wait_until="networkidle")
+                playwright_login(page)
+                expect(page).to_have_url(re.compile(r"/$"))
+
+                page.locator('[data-category-filter="career"]').click()
+                expect(page).to_have_url(re.compile(r"category=career"))
+                expect(page.locator(".goal-grid")).to_contain_text("Learn more about AI safety")
+                expect(page.locator(".goal-grid")).not_to_contain_text("Stay active & healthy")
+                expect(page.locator("#steps-panel")).to_contain_text(
+                    "Continue learning about LucidAI and their tech"
+                )
+                expect(page.locator("#steps-panel")).not_to_contain_text(
+                    "Go to Yoga6 in Palo Alto at 12pm"
+                )
+
+                page.locator('[data-category-filter=""]').click()
+                expect(page).to_have_url(re.compile(r"/$"))
+                expect(page.locator(".goal-grid")).to_contain_text("Stay active & healthy")
+                expect(page.locator("#steps-panel")).to_contain_text(
+                    "Go to Yoga6 in Palo Alto at 12pm"
+                )
+            finally:
+                browser.close()
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=5)
 
 
 def test_playwright_scoped_chat_flow(tmp_path, monkeypatch):

@@ -8,6 +8,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse, StreamingResponse
@@ -60,6 +61,12 @@ class ChatStreamJob:
 
 
 _STREAM_JOBS: dict[str, ChatStreamJob] = {}
+
+
+@dataclass(frozen=True)
+class DashboardFilters:
+    selected_category: str | None = None
+    selected_goal_id: int | None = None
 
 
 def category_class(category: str) -> str:
@@ -116,6 +123,77 @@ def template_context(request: Request, **model: Any) -> dict[str, Any]:
     }
 
 
+def _optional_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _dashboard_filter_url(
+    category: str | None = None,
+    goal_id: int | None = None,
+    path: str = "/",
+) -> str:
+    params: dict[str, str | int] = {}
+    if category:
+        params["category"] = category
+    if goal_id is not None:
+        params["goal_id"] = goal_id
+    query = urlencode(params)
+    return f"{path}?{query}" if query else path
+
+
+def _filter_query_suffix(filters: DashboardFilters) -> str:
+    query = _dashboard_filter_url(
+        filters.selected_category,
+        filters.selected_goal_id,
+        path="",
+    )
+    return query
+
+
+def _parse_dashboard_filters(
+    request: Request | None,
+    goals_by_id: dict[int, dict[str, Any]],
+) -> DashboardFilters:
+    if request is None:
+        return DashboardFilters()
+
+    active_categories = {goal["category"] for goal in goals_by_id.values()}
+    raw_category = (request.query_params.get("category") or "").strip()
+    selected_category = raw_category if raw_category in active_categories else None
+    selected_goal_id = _optional_int(request.query_params.get("goal_id"))
+
+    if selected_goal_id is None:
+        return DashboardFilters(selected_category=selected_category)
+
+    selected_goal = goals_by_id.get(selected_goal_id)
+    if selected_goal is None:
+        return DashboardFilters(selected_category=selected_category)
+    if selected_category is not None and selected_goal["category"] != selected_category:
+        return DashboardFilters(selected_category=selected_category)
+
+    return DashboardFilters(
+        selected_category=selected_category or selected_goal["category"],
+        selected_goal_id=selected_goal_id,
+    )
+
+
+def _goal_matches_filter(
+    goal: dict[str, Any],
+    filters: DashboardFilters,
+) -> bool:
+    if filters.selected_category and goal["category"] != filters.selected_category:
+        return False
+    if filters.selected_goal_id is not None and goal["id"] != filters.selected_goal_id:
+        return False
+    return True
+
+
 def build_dashboard_model(
     store: SharedGoalStore,
     request: Request | None = None,
@@ -124,6 +202,7 @@ def build_dashboard_model(
     goals = store.list_goals(status="active")
     steps = store.list_steps()
     goals_by_id = {goal["id"]: goal for goal in goals}
+    filters = _parse_dashboard_filters(request, goals_by_id)
 
     goal_cards = []
     for goal in goals:
@@ -132,38 +211,77 @@ def build_dashboard_model(
             "category_class": category_class(goal["category"]),
             "scope_type": "goal",
             "scope_id": goal["id"],
+            "filter_url": _dashboard_filter_url(goal["category"], goal["id"]),
+            "is_selected": goal["id"] == filters.selected_goal_id,
         })
 
     categories: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for goal in goal_cards:
+        if not _goal_matches_filter(goal, DashboardFilters(filters.selected_category)):
+            continue
         categories[goal["category"]].append(goal)
 
-    suggestions = build_step_cards(steps, goals_by_id, "suggested")
-    accepted_steps = build_step_cards(steps, goals_by_id, "accepted")
+    suggestions = build_step_cards(steps, goals_by_id, "suggested", filters)
+    accepted_steps = build_step_cards(steps, goals_by_id, "accepted", filters)
 
     active_context = suggestions[0] if suggestions else accepted_steps[0] if accepted_steps else None
     chat_context = chat_context_from_step(active_context) if active_context else None
+    filter_query_suffix = _filter_query_suffix(filters)
 
     return {
         "categories": dict(categories),
+        "category_filters": build_category_filters(goals, filters),
         "goals": goal_cards,
         "suggestions": suggestions,
         "accepted_steps": accepted_steps,
         "visible_steps": suggestions + accepted_steps,
-        "inbox_items": build_inbox_cards(memory),
+        "inbox_items": build_inbox_cards(memory, store, goals_by_id, filters),
         "active_context": active_context,
         "chat_context": chat_context,
         "chat_messages": [],
         "has_more_messages": False,
         "activity_receipt": None,
         "initial_title": title_for_date(),
+        "selected_category": filters.selected_category,
+        "selected_goal_id": filters.selected_goal_id,
+        "filter_query_suffix": filter_query_suffix,
     }
 
 
-def build_inbox_cards(memory: PersonaMemory) -> list[dict[str, Any]]:
+def build_category_filters(
+    goals: list[dict[str, Any]],
+    filters: DashboardFilters,
+) -> list[dict[str, Any]]:
+    categories = sorted({goal["category"] for goal in goals})
+    items = [{
+        "label": "All",
+        "value": "",
+        "category_class": "category-general",
+        "url": _dashboard_filter_url(),
+        "is_active": filters.selected_category is None and filters.selected_goal_id is None,
+    }]
+    for category in categories:
+        items.append({
+            "label": category,
+            "value": category,
+            "category_class": category_class(category),
+            "url": _dashboard_filter_url(category),
+            "is_active": category == filters.selected_category,
+        })
+    return items
+
+
+def build_inbox_cards(
+    memory: PersonaMemory,
+    store: SharedGoalStore,
+    goals_by_id: dict[int, dict[str, Any]],
+    filters: DashboardFilters,
+) -> list[dict[str, Any]]:
     cards = []
     for item in memory.list_agent_inbox_items(status="unread", surface="dashboard"):
         actions = decode_inbox_actions(item)
+        if not _inbox_item_matches_filter(actions, store, goals_by_id, filters):
+            continue
         action_types = {action.get("type") for action in actions}
         open_chat = next(
             (action for action in actions if action.get("type") == "open_chat"),
@@ -179,10 +297,40 @@ def build_inbox_cards(memory: PersonaMemory) -> list[dict[str, Any]]:
     return cards
 
 
+def _inbox_item_matches_filter(
+    actions: list[dict[str, Any]],
+    store: SharedGoalStore,
+    goals_by_id: dict[int, dict[str, Any]],
+    filters: DashboardFilters,
+) -> bool:
+    step_id = _inbox_step_id(actions)
+    if step_id is None:
+        return True
+    step = store.get_step(step_id)
+    if step is None:
+        return False
+    goal = goals_by_id.get(step["goal_id"])
+    if goal is None:
+        return False
+    return _goal_matches_filter(goal, filters)
+
+
+def _inbox_step_id(actions: list[dict[str, Any]]) -> int | None:
+    for action in actions:
+        step_id = action.get("step_id")
+        if step_id is not None:
+            return _optional_int(str(step_id))
+    for action in actions:
+        if action.get("type") == "open_chat" and action.get("scope_type") == "step":
+            return _optional_int(str(action.get("scope_id")))
+    return None
+
+
 def build_step_cards(
     steps: list[dict[str, Any]],
     goals_by_id: dict[int, dict[str, Any]],
     status: str,
+    filters: DashboardFilters = DashboardFilters(),
 ) -> list[dict[str, Any]]:
     cards = []
     for step in steps:
@@ -190,6 +338,8 @@ def build_step_cards(
             continue
         goal = goals_by_id.get(step["goal_id"])
         if goal is None:
+            continue
+        if not _goal_matches_filter(goal, filters):
             continue
         cards.append({
             **step,
