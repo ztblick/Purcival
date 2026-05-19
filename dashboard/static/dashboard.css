@@ -11,6 +11,7 @@
   --green: #6dffb3;
   --red: #ff5d73;
   --cyan: #5df7ff;
+  --teal: #4fb3c7;
   --blue: #58a6ff;
   --gold: #ffd166;
   --pink: #ff6bd6;
@@ -644,6 +645,10 @@ h3 {
 
 .category-career {
   --category-accent: var(--orange);
+}
+
+.category-family {
+  --category-accent: var(--teal);
 }
 
 .category-health {
