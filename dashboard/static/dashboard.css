@@ -97,31 +97,30 @@ button:disabled {
 
 .category-filter {
   display: flex;
-  gap: 9px;
+  gap: 8px;
   min-width: 0;
   overflow-x: auto;
-  padding: 4px 2px 8px;
-  scrollbar-color: rgba(93, 247, 255, 0.42) rgba(255, 255, 255, 0.08);
+  padding: 3px 2px 7px;
+  scrollbar-color: rgba(255, 138, 42, 0.48) rgba(255, 255, 255, 0.08);
 }
 
 .category-bubble {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  min-height: 39px;
-  border: 1px solid color-mix(in srgb, var(--category-accent, var(--cyan)) 48%, var(--line));
+  width: max-content;
+  max-width: 100%;
+  border: 1px solid color-mix(in srgb, var(--category-accent, var(--orange)) 56%, transparent);
   border-radius: 999px;
-  padding: 0 18px;
-  color: color-mix(in srgb, var(--category-accent, var(--cyan)) 86%, var(--text));
-  background:
-    radial-gradient(circle at 18% 18%, color-mix(in srgb, var(--category-accent, var(--cyan)) 22%, transparent), transparent 48%),
-    rgba(255, 255, 255, 0.045);
+  padding: 6px 10px;
+  color: var(--category-accent, var(--orange));
+  background: color-mix(in srgb, var(--category-accent, var(--orange)) 10%, transparent);
   font-family: "Cascadia Mono", Consolas, monospace;
-  font-size: 0.78rem;
-  letter-spacing: 0.04em;
-  text-decoration: none;
+  font-size: 0.72rem;
   text-transform: uppercase;
+  text-decoration: none;
   transition:
+    background 160ms ease,
     border-color 160ms ease,
     box-shadow 160ms ease,
     transform 160ms ease;
@@ -130,17 +129,15 @@ button:disabled {
 .category-bubble:hover,
 .category-bubble:focus-visible,
 .category-bubble--active {
-  border-color: color-mix(in srgb, var(--category-accent, var(--cyan)) 80%, var(--line));
-  box-shadow: 0 0 22px color-mix(in srgb, var(--category-accent, var(--cyan)) 28%, transparent);
+  border-color: color-mix(in srgb, var(--category-accent, var(--orange)) 82%, transparent);
+  background: color-mix(in srgb, var(--category-accent, var(--orange)) 16%, transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--category-accent, var(--orange)) 22%, transparent);
   outline: none;
   transform: translateY(-1px);
 }
 
 .category-bubble--active {
-  color: var(--text);
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--category-accent, var(--cyan)) 24%, transparent), rgba(255, 255, 255, 0.06)),
-    rgba(255, 255, 255, 0.06);
+  color: color-mix(in srgb, var(--category-accent, var(--orange)) 84%, var(--text));
 }
 
 .session-form {
