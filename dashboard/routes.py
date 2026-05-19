@@ -221,10 +221,11 @@ def build_dashboard_model(
             continue
         categories[goal["category"]].append(goal)
 
-    suggestions = build_step_cards(steps, goals_by_id, "suggested", filters)
     accepted_steps = build_step_cards(steps, goals_by_id, "accepted", filters)
+    suggestions = build_step_cards(steps, goals_by_id, "suggested", filters)
+    visible_steps = accepted_steps + suggestions
 
-    active_context = suggestions[0] if suggestions else accepted_steps[0] if accepted_steps else None
+    active_context = visible_steps[0] if visible_steps else None
     chat_context = chat_context_from_step(active_context) if active_context else None
     filter_query_suffix = _filter_query_suffix(filters)
 
@@ -234,7 +235,7 @@ def build_dashboard_model(
         "goals": goal_cards,
         "suggestions": suggestions,
         "accepted_steps": accepted_steps,
-        "visible_steps": suggestions + accepted_steps,
+        "visible_steps": visible_steps,
         "inbox_items": build_inbox_cards(memory, store, goals_by_id, filters),
         "active_context": active_context,
         "chat_context": chat_context,

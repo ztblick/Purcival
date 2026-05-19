@@ -244,6 +244,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-19 - Dashboard accepted-step visibility fix - rendered accepted steps before suggestions so accepting a filtered step remains visible, added regression coverage for accepting under a category filter, and kept full pytest passing - committed.
 - 2026-05-19 - Dashboard category filter visual polish - matched category filter bubbles to the compact colored card-tag pill format, cache-busted the dashboard stylesheet, browser-verified computed styles against goal card tags, and kept full pytest passing - committed.
 - 2026-05-19 - Dashboard category filter implementation - added top-strip category bubbles, query-backed category/goal filtering, filtered goal/step/inbox rendering, JS partial refresh/reset behavior, active visual states, dashboard/Playwright coverage, a seeded browser smoke check, and full pytest passing - committed.
 - 2026-05-19 - Dashboard category filter design - drafted the category bubble/filter design in `Design/dashboard_goals_design.md`, including the `All` reset, category/goal filtering rules, inbox behavior, and test targets; no production code written pending Zach approval - committed.

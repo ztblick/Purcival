@@ -637,6 +637,9 @@ def test_step_accept_and_reject_routes(tmp_path, monkeypatch):
     accept_response = client.post(f"/steps/{yoga_step['id']}/accept", headers=headers)
     assert accept_response.status_code == 200
     assert "step-card--accepted" in accept_response.text
+    assert accept_response.text.index("step-card--accepted") < accept_response.text.index(
+        "step-card--suggested"
+    )
     assert "Receipt:" in accept_response.text
     assert SharedGoalStore(db_path).get_step(yoga_step["id"])["status"] == "accepted"
 
@@ -651,6 +654,30 @@ def test_step_accept_and_reject_routes(tmp_path, monkeypatch):
     assert len(mem.get_agent_events(event_type="step_accepted")) == 1
     assert len(mem.list_agent_opportunities(kind="accountability_check")) == 1
     assert len(mem.get_agent_events(event_type="step_rejected")) == 1
+
+
+def test_filtered_step_accept_remains_visible_as_accepted(tmp_path, monkeypatch):
+    db_path = tmp_path / "user.db"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    client = make_client(monkeypatch, tmp_path, db_path)
+    login(client)
+
+    career_step = next(
+        step for step in store.list_steps(status="suggested")
+        if step["title"] == "Continue learning about LucidAI and their tech"
+    )
+
+    response = client.post(
+        f"/steps/{career_step['id']}/accept?category=career",
+        headers=csrf_headers(client, path="/?category=career"),
+    )
+
+    assert response.status_code == 200
+    assert f'data-step-id="{career_step["id"]}"' in response.text
+    assert "Continue learning about LucidAI and their tech" in response.text
+    assert "step-card--accepted" in response.text
+    assert "Go to Yoga6 in Palo Alto at 12pm" not in response.text
 
 
 def test_step_complete_and_abandon_routes_write_receipts(tmp_path, monkeypatch):
