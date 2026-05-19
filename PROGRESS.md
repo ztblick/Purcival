@@ -8,7 +8,7 @@ agent sessions. Read it in full each session. Update sections marked
 
 ## Current focus                                          *updatable*
 
-**Last updated:** 2026-05-18
+**Last updated:** 2026-05-19
 **Active task:** Core agent reliability redesign
 **Phase:** Phase F - structured working memory and reflection first slice implemented
 **Status:** The Goals dashboard task is closed as the primary development focus. Do not continue dashboard Phase 6 as previously scoped. The active redesign plan remains `Design/core_agent_reliability_redesign.md`: migrate the agent loop toward an event log, explicit job types, an opportunity queue, planner/policy/compiler separation, durable execution state, a dashboard delivery inbox, scoped capabilities, and an untrusted-content boundary before adding web/file/computer tools. Phase A safety/instrumentation, Phase B event/jobs, Phase C opportunities, Phase D accountability receipts, and Phase E inbox/mobile access are all in place. Phase F's first narrow slice is now implemented: per-persona typed `memory_items`, validators and confidence/status lifecycle rules, `conversation_message` events, auto-scheduled `reflection` jobs, deterministic event-to-memory processing for step outcomes/inbox feedback/user corrections, and structured-memory inclusion in chat/reasoning context. The remaining open question is the future correction/activity UX for autonomous memory writes. Do not jump ahead to planner/compiler, capability registry, web tools, file tools, public hosting, or computer-control work without explicitly deciding whether any more Phase F correction surfacing is needed first.
@@ -245,6 +245,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
+- 2026-05-19 - Dashboard chat streaming scroll fix - preserved manual upward scroll position while scoped chat responses stream, added a browser-level regression for streaming while scrolled away from the bottom, and kept full pytest passing - uncommitted.
 - 2026-05-18 - Core agent reliability Phase E.5 verification handoff - recorded Zach's successful Tailscale mobile verification, marked Phase F structured working memory/reflection as the next approved implementation target, refreshed `AGENTS.md`, `README.md`, `PROGRESS.md`, and `Design/core_agent_reliability_redesign.md` for a fresh Codex handoff - committed.
 - 2026-05-18 - Core agent reliability Phase F first slice - added per-persona typed `memory_items`, validators and status transitions, `conversation_message` events, auto-scheduled reflection jobs, deterministic event-to-memory processing for step outcomes/inbox feedback/user corrections, structured-memory prompt context, and focused reflection/context/agent tests with full pytest passing - committed.
 - 2026-05-18 - Core agent reliability architecture audit - mapped proposed architecture features 5.1 through 5.10 against the Phase A-E code, documented the partial/missing pieces in `Design/core_agent_reliability_redesign.md`, and revised the phase plan so structured memory/reflection, planner-policy-compiler separation, durable action execution, capability metadata, delivery correction UX, and the untrusted-content boundary land before web/file tools - committed.

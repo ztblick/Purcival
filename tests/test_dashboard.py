@@ -902,3 +902,210 @@ def test_playwright_scoped_chat_flow(tmp_path, monkeypatch):
         "user",
         "assistant",
     ]
+
+
+def test_playwright_streaming_keeps_manual_scroll_position(tmp_path, monkeypatch):
+    try:
+        from playwright.sync_api import expect, sync_playwright
+    except ImportError:
+        pytest.skip("Playwright is not installed")
+
+    db_path = tmp_path / "user.db"
+    memory_dir = tmp_path / "persona_data"
+    store = SharedGoalStore(db_path)
+    seed_mockup_data(store)
+    step = next(
+        row for row in store.list_steps(status="suggested")
+        if row["title"] == "Go to Yoga6 in Palo Alto at 12pm"
+    )
+
+    monkeypatch.setattr(memory, "DATA_DIR", memory_dir)
+    mem = PersonaMemory("jo")
+    scope = MessageScope.step(step["id"])
+    for index in range(60):
+        role = "user" if index % 2 == 0 else "assistant"
+        mem.add_message(role, f"Earlier scoped message {index}", scope=scope)
+
+    port = find_free_port()
+    url = f"http://127.0.0.1:{port}/"
+    env = dashboard_subprocess_env(
+        tmp_path,
+        db_path,
+        PURCIVAL_MEMORY_DATA_DIR=str(memory_dir),
+    )
+    server = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "dashboard.app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    try:
+        wait_for_server(url, server)
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception:
+                try:
+                    browser = playwright.chromium.launch(channel="msedge")
+                except Exception:
+                    pytest.skip("No Playwright Chromium-compatible browser is installed")
+
+            try:
+                page = browser.new_page(viewport={"width": 1280, "height": 900})
+                page.add_init_script(
+                    """
+                    (() => {
+                      const originalFetch = window.fetch.bind(window);
+                      window.__eventSources = [];
+
+                      class FakeEventSource {
+                        constructor(url) {
+                          this.url = url;
+                          this.listeners = {};
+                          this.closed = false;
+                          window.__eventSources.push(this);
+                        }
+
+                        addEventListener(type, listener) {
+                          if (!this.listeners[type]) {
+                            this.listeners[type] = [];
+                          }
+                          this.listeners[type].push(listener);
+                        }
+
+                        close() {
+                          this.closed = true;
+                        }
+
+                        emit(type, payload) {
+                          const event = { data: JSON.stringify(payload) };
+                          for (const listener of this.listeners[type] || []) {
+                            listener(event);
+                          }
+                        }
+                      }
+
+                      window.EventSource = FakeEventSource;
+                      window.fetch = async (input, init = {}) => {
+                        const url = typeof input === "string" ? input : input.url;
+                        const method = (init.method || "GET").toUpperCase();
+                        if (method === "POST" && /\\/chat\\/step\\/\\d+\\/messages$/.test(url)) {
+                          return new Response(
+                            JSON.stringify({ stream_id: "fake-stream", message_id: 12345 }),
+                            {
+                              status: 200,
+                              headers: { "Content-Type": "application/json" },
+                            },
+                          );
+                        }
+                        return originalFetch(input, init);
+                      };
+                    })();
+                    """
+                )
+                page.goto(url, wait_until="networkidle")
+                playwright_login(page)
+                expect(page).to_have_url(re.compile(r"/$"))
+                page.locator(f'[data-step-id="{step["id"]}"]').click(position={"x": 20, "y": 20})
+                expect(page.locator(".chat-panel")).to_have_attribute(
+                    "data-chat-scope-id",
+                    str(step["id"]),
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const stack = document.querySelector(".message-stack");
+                      return Boolean(stack && stack.scrollHeight > stack.clientHeight);
+                    }
+                    """
+                )
+
+                textarea = page.locator('textarea[name="message"]')
+                textarea.fill("Keep streaming while I scroll up.")
+                page.locator('form[data-chat-form] button[type="submit"]').click()
+                page.wait_for_function(
+                    "() => window.__eventSources && window.__eventSources.length === 1"
+                )
+
+                before_scroll_top = page.evaluate(
+                    """
+                    () => {
+                      const stack = document.querySelector(".message-stack");
+                      const target = Math.max(
+                        64,
+                        stack.scrollHeight - stack.clientHeight - 240,
+                      );
+                      stack.scrollTop = target;
+                      return stack.scrollTop;
+                    }
+                    """
+                )
+
+                page.evaluate(
+                    """
+                    () => {
+                      window.__eventSources[0].emit("delta", {
+                        text: "First streamed chunk.",
+                      });
+                    }
+                    """
+                )
+                expect(page.locator(".message-stack")).to_contain_text("First streamed chunk.")
+                first_scroll_top = page.evaluate(
+                    "() => document.querySelector('.message-stack').scrollTop"
+                )
+                assert abs(first_scroll_top - before_scroll_top) <= 1
+
+                page.evaluate(
+                    """
+                    () => {
+                      window.__eventSources[0].emit("delta", {
+                        text: "\\n\\nSecond streamed chunk.",
+                      });
+                    }
+                    """
+                )
+                expect(page.locator(".message-stack")).to_contain_text("Second streamed chunk.")
+                second_scroll_top = page.evaluate(
+                    "() => document.querySelector('.message-stack').scrollTop"
+                )
+                distance_from_bottom = page.evaluate(
+                    """
+                    () => {
+                      const stack = document.querySelector(".message-stack");
+                      return stack.scrollHeight - stack.clientHeight - stack.scrollTop;
+                    }
+                    """
+                )
+
+                assert abs(second_scroll_top - before_scroll_top) <= 1
+                assert distance_from_bottom > 120
+
+                page.evaluate(
+                    """
+                    () => {
+                      window.__eventSources[0].emit("done", { message_id: 98765 });
+                    }
+                    """
+                )
+            finally:
+                browser.close()
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=5)

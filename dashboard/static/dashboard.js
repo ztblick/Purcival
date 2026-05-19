@@ -243,6 +243,18 @@ function createChatMessage(role, text = "", id = null) {
   return wrapper;
 }
 
+function distanceFromBottom(stack) {
+  return stack.scrollHeight - stack.scrollTop - stack.clientHeight;
+}
+
+function isNearBottom(stack, threshold = 48) {
+  return distanceFromBottom(stack) <= threshold;
+}
+
+function scrollToBottom(stack) {
+  stack.scrollTop = stack.scrollHeight;
+}
+
 function oldestMessageId(stack) {
   const oldest = stack.querySelector(".chat-message[data-message-id]");
   return oldest ? oldest.dataset.messageId : stack.dataset.oldestMessageId;
@@ -304,7 +316,7 @@ function setupChatHistory(root) {
       return;
     }
     stack.dataset.chatHistoryInitialized = "true";
-    stack.scrollTop = stack.scrollHeight;
+    scrollToBottom(stack);
     stack.addEventListener("scroll", () => {
       if (stack.scrollTop <= 24) {
         loadOlderMessages(stack);
@@ -336,7 +348,7 @@ async function submitChatForm(form) {
   stack.appendChild(userMessage);
   const assistantMessage = createChatMessage("assistant", "");
   stack.appendChild(assistantMessage);
-  stack.scrollTop = stack.scrollHeight;
+  scrollToBottom(stack);
 
   if (textarea) {
     textarea.value = "";
@@ -370,10 +382,13 @@ async function submitChatForm(form) {
     let assistantMarkdown = "";
 
     stream.addEventListener("delta", (event) => {
+      const shouldStickToBottom = isNearBottom(stack);
       const data = parseEventPayload(event);
       assistantMarkdown += data.text || "";
       renderMarkdownInto(assistantMessage, assistantMarkdown);
-      stack.scrollTop = stack.scrollHeight;
+      if (shouldStickToBottom) {
+        scrollToBottom(stack);
+      }
     });
 
     stream.addEventListener("done", (event) => {
@@ -394,9 +409,12 @@ async function submitChatForm(form) {
     stream.addEventListener("receipt", (event) => {
       const data = parseEventPayload(event);
       if (data.text) {
+        const shouldStickToBottom = isNearBottom(stack);
         const receiptMessage = createChatMessage("assistant", data.text, data.message_id);
         stack.appendChild(receiptMessage);
-        stack.scrollTop = stack.scrollHeight;
+        if (shouldStickToBottom) {
+          scrollToBottom(stack);
+        }
       }
       refreshStepsPanel();
     });
