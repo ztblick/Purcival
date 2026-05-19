@@ -244,7 +244,7 @@ When you stop at a gate, append an entry with:
 Most recent first. Format:
 `YYYY-MM-DD — task — what was done — commit shortref`.
 
-- 2026-05-19 - Dashboard category filter implementation - added top-strip category bubbles, query-backed category/goal filtering, filtered goal/step/inbox rendering, JS partial refresh/reset behavior, active visual states, dashboard/Playwright coverage, a seeded browser smoke check, and full pytest passing - uncommitted.
+- 2026-05-19 - Dashboard category filter implementation - added top-strip category bubbles, query-backed category/goal filtering, filtered goal/step/inbox rendering, JS partial refresh/reset behavior, active visual states, dashboard/Playwright coverage, a seeded browser smoke check, and full pytest passing - committed.
 - 2026-05-19 - Dashboard category filter design - drafted the category bubble/filter design in `Design/dashboard_goals_design.md`, including the `All` reset, category/goal filtering rules, inbox behavior, and test targets; no production code written pending Zach approval - committed.
 - 2026-05-19 - Dashboard chat streaming scroll fix - preserved manual upward scroll position while scoped chat responses stream, added a browser-level regression for streaming while scrolled away from the bottom, and kept full pytest passing - uncommitted.
 - 2026-05-18 - Core agent reliability Phase E.5 verification handoff - recorded Zach's successful Tailscale mobile verification, marked Phase F structured working memory/reflection as the next approved implementation target, refreshed `AGENTS.md`, `README.md`, `PROGRESS.md`, and `Design/core_agent_reliability_redesign.md` for a fresh Codex handoff - committed.
