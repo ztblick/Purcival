@@ -1,8 +1,8 @@
 # Goals Dashboard Design
 
-**Status:** Phase 5 agent suggestion generation complete; Phase 6 ready for next development cycle
-**Date:** 2026-05-17
-**Phase:** 5 - Agent suggestion generation
+**Status:** Phase 5 agent suggestion generation complete; category filter UI design awaiting approval
+**Date:** 2026-05-19
+**Phase:** 5 adjunct - Dashboard category filtering
 **Scope:** shared goal state, scoped conversations, dashboard UI, and agent integration
 
 ---
@@ -779,6 +779,8 @@ Layout:
 - Main work area: large focused Jo chat.
 - Secondary rail: suggested and accepted steps as context.
 - Goal and step cards use stable category accent colors.
+- Category filter bubbles sit in the top strip on the same horizontal level as
+  the motivational title, using the same stable category accent colors.
 - Step cards show the inherited goal category as a compact tag.
 - Dashboard title changes once per calendar day, not on a timer.
 - The title and goal rail are merged to preserve vertical space for chat.
@@ -817,6 +819,88 @@ Phase 5 is complete: the agent loop registers goal and suggestion tools, the
 planning prompt asks for at most 1-3 one-shot suggestions during planning
 cycles, and suggested steps created by the agent land in `data/user.db` for the
 dashboard to render.
+
+### Category filter bubbles
+
+This is a reopened dashboard UI adjunct requested by Zach on 2026-05-18. It
+does not change the goal schema, step schema, tool APIs, or category hierarchy.
+
+The top strip should add a horizontally scrollable category bubble row on the
+same visual level as the motivational message. Bubbles are derived from active
+goal categories, not from a new `categories` table. Include an `All` bubble as
+the clear/reset control; without it, a selected category would be sticky with
+no obvious escape hatch.
+
+Filter state is dashboard UI state only:
+
+```text
+selected_category: str | None
+selected_goal_id: int | None
+```
+
+Implementation should expose that state through query parameters:
+
+```text
+GET /?category=career
+GET /?category=career&goal_id=1
+GET /partials/goals?category=career&goal_id=1
+GET /partials/suggestions?category=career&goal_id=1
+```
+
+Use server-rendered filtering as the source of truth, with vanilla JS only
+enhancing the interaction so clicking a bubble or goal refreshes the affected
+partials without a full page reload. If JavaScript is unavailable, category
+bubbles can still be normal links to the filtered dashboard URL.
+
+Filtering rules:
+
+- With no filter selected, show all active goal cards and all visible steps.
+- Visible steps are still only `suggested` and `accepted`; rejected,
+  completed, and abandoned steps remain hidden from the main step rail.
+- Selecting a category shows only active goals whose `goal.category` matches
+  that category, and only visible steps whose parent goal is in that category.
+- Selecting a goal further narrows the steps rail to visible steps under that
+  goal. Because a goal belongs to exactly one category, the goal selection
+  implies the category for step filtering.
+- Clicking a category bubble clears any selected goal unless that goal belongs
+  to the selected category and the UI explicitly preserves it. The safer v1
+  behavior is to clear the goal so the category view opens back up.
+- Clicking `All` clears both `selected_category` and `selected_goal_id`.
+- Step-backed inbox cards should follow the same category/goal filter as the
+  step rail. Non-step inbox cards, if any appear later, should remain visible
+  unless a future design adds category metadata to inbox items.
+
+Goal click behavior:
+
+- Clicking a goal card continues to open the scoped goal chat.
+- The same click should also set `selected_goal_id` and refresh the steps rail
+  so it shows only steps belonging to that goal.
+- The selected goal card should receive an active visual state.
+- The selected category bubble should receive an active visual state when a
+  category is selected directly or implied by the selected goal.
+
+Do not implement:
+
+- New category persistence.
+- Editable category bubbles.
+- Step-level category assignment.
+- Multiple categories per goal or step.
+- Step re-parenting as a side effect of filtering.
+
+Tests should cover:
+
+- The default dashboard still shows all active goals and visible steps.
+- `category=career` renders only career goals and career suggested/accepted
+  steps.
+- `category=career&goal_id=<career goal>` renders only that goal's visible
+  steps.
+- Invalid or mismatched `goal_id` values do not leak unrelated steps into the
+  filtered rail; prefer clearing the goal filter over raising a user-facing
+  error.
+- The category bubble row renders an `All` reset and one bubble per active goal
+  category.
+- The Playwright dashboard flow can click a category bubble, verify nonmatching
+  goals/steps are hidden, then click `All` and verify they return.
 
 ---
 
@@ -952,6 +1036,29 @@ Rationale:
 Future work can revisit this only if Zach explicitly asks for richer taxonomy
 or step re-parenting. Until then, category tags on step cards are labels, not
 controls.
+
+### Phase 5 adjunct - Category filtering
+
+Designed, awaiting Zach approval before production implementation.
+
+Implement:
+
+- Category bubbles in the top strip beside the motivational title.
+- Query-parameter-backed filter state for `category` and `goal_id`.
+- Server-side filtering in the dashboard model for goal cards, step cards, and
+  step-backed inbox cards.
+- Vanilla JS enhancement for partial refreshes without replacing the
+  server-rendered source of truth.
+- Active visual states for selected category and selected goal.
+
+Acceptance:
+
+- Category bubbles horizontally scroll when they overflow.
+- Clicking `career` shows only career goals and career suggested/accepted
+  steps.
+- Clicking a goal narrows visible steps to that goal.
+- Clicking `All` restores the unfiltered dashboard.
+- Existing scoped goal/step chat behavior still works.
 
 ### Phase 5 - Agent suggestion generation
 
